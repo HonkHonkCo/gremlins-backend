@@ -1,8 +1,8 @@
-const express = require('express')
-const router = express.Router()
-const supabase = require('../services/supabase')
+import { Router } from 'express'
+import supabase from '../services/supabase.js'
 
-// Получить всех гремлинов юзера
+const router = Router()
+
 router.get('/', async (req, res) => {
   const { user_id } = req.query
   if (!user_id) return res.status(400).json({ error: 'user_id required' })
@@ -17,7 +17,6 @@ router.get('/', async (req, res) => {
   res.json(data)
 })
 
-// Создать гремлина
 router.post('/', async (req, res) => {
   const { user_id, role, name, description } = req.body
   if (!user_id || !role || !name) {
@@ -34,10 +33,8 @@ router.post('/', async (req, res) => {
   res.json(data)
 })
 
-// Обновить гремлина
 router.patch('/:id', async (req, res) => {
   const { name, description } = req.body
-
   const { data, error } = await supabase
     .from('gremlins')
     .update({ name, description })
@@ -49,15 +46,10 @@ router.patch('/:id', async (req, res) => {
   res.json(data)
 })
 
-// Удалить гремлина
 router.delete('/:id', async (req, res) => {
-  const { error } = await supabase
-    .from('gremlins')
-    .delete()
-    .eq('id', req.params.id)
-
+  const { error } = await supabase.from('gremlins').delete().eq('id', req.params.id)
   if (error) return res.status(500).json({ error: error.message })
   res.json({ ok: true })
 })
 
-module.exports = router
+export default router

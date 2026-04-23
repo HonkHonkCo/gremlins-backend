@@ -1,14 +1,12 @@
-const express = require('express')
-const router = express.Router()
-const supabase = require('../services/supabase')
+import { Router } from 'express'
+import supabase from '../services/supabase.js'
 
-// Получить или создать юзера по telegram_id
+const router = Router()
+
 router.post('/sync', async (req, res) => {
   const { telegram_id, username } = req.body
-
   if (!telegram_id) return res.status(400).json({ error: 'telegram_id required' })
 
-  // Ищем существующего
   let { data: user, error } = await supabase
     .from('users')
     .select('*')
@@ -19,7 +17,6 @@ router.post('/sync', async (req, res) => {
     return res.status(500).json({ error: error.message })
   }
 
-  // Создаём если нет
   if (!user) {
     const { data: newUser, error: createError } = await supabase
       .from('users')
@@ -34,7 +31,6 @@ router.post('/sync', async (req, res) => {
   res.json(user)
 })
 
-// Получить юзера
 router.get('/:telegram_id', async (req, res) => {
   const { data, error } = await supabase
     .from('users')
@@ -46,4 +42,4 @@ router.get('/:telegram_id', async (req, res) => {
   res.json(data)
 })
 
-module.exports = router
+export default router
