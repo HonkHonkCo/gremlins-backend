@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     .from('entries')
     .select('*')
     .eq('gremlin_id', gremlin_id)
-    .order('entry_date', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(limit)
 
   if (error) return res.status(500).json({ error: error.message })
