@@ -63,20 +63,53 @@ router.post('/chat', async (req, res) => {
 
 function mergeStats(current, parsed, role) {
   const stats = { ...current }
-  if (role === 'accountant' && parsed.total) {
-    stats.today_total = (stats.today_total || 0) + parsed.total
-    stats.week_total = (stats.week_total || 0) + parsed.total
+
+  if (role === 'accountant') {
+    // Новый умный формат с валютами
+    if (parsed.totals) {
+      const t = parsed.totals
+      stats.expense_thb = (stats.expense_thb || 0) + (t.expense_thb || 0)
+      stats.expense_rub = (stats.expense_rub || 0) + (t.expense_rub || 0)
+      stats.expense_usd = (stats.expense_usd || 0) + (t.expense_usd || 0)
+      stats.income_thb = (stats.income_thb || 0) + (t.income_thb || 0)
+      stats.income_rub = (stats.income_rub || 0) + (t.income_rub || 0)
+      stats.income_usd = (stats.income_usd || 0) + (t.income_usd || 0)
+      stats.investment_rub = (stats.investment_rub || 0) + (t.investment_rub || 0)
+      stats.investment_usd = (stats.investment_usd || 0) + (t.investment_usd || 0)
+      // Остаток по каждой валюте
+      stats.balance_thb = (stats.income_thb || 0) - (stats.expense_thb || 0)
+      stats.balance_rub = (stats.income_rub || 0) - (stats.expense_rub || 0)
+      stats.balance_usd = (stats.income_usd || 0) - (stats.expense_usd || 0)
+    } else if (parsed.total) {
+      // Старый формат — для совместимости
+      stats.today_total = (stats.today_total || 0) + parsed.total
+      stats.week_total = (stats.week_total || 0) + parsed.total
+    }
     stats.last_updated = new Date().toISOString().split('T')[0]
   }
+
   if (role === 'trainer') {
     if (parsed.calories) stats.last_calories = parsed.calories
     if (parsed.workout) stats.last_workout = parsed.workout
     if (parsed.water_liters) stats.last_water = parsed.water_liters
+    if (parsed.weight_kg) stats.weight_kg = parsed.weight_kg
+    if (parsed.steps) stats.steps = parsed.steps
   }
-  if (role === 'secretary' && parsed.task) {
-    stats.pending_tasks = (stats.pending_tasks || 0) + 1
-    stats.last_task = parsed.task
+
+  if (role === 'secretary') {
+    if (parsed.task) {
+      stats.pending_tasks = (stats.pending_tasks || 0) + 1
+      stats.last_task = parsed.task
+      if (parsed.deadline) stats.next_deadline = parsed.deadline
+    }
   }
+
+  if (role === 'chef') {
+    if (parsed.calories) stats.last_calories = parsed.calories
+    if (parsed.meal) stats.last_meal = parsed.meal
+    if (parsed.protein) stats.last_protein = parsed.protein
+  }
+
   return stats
 }
 

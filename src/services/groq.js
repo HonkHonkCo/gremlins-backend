@@ -30,25 +30,52 @@ ${entriesText || 'Пока ничего нет.'}`
 }
 
 export async function parseEntry(role, content) {
+  let systemPrompt = ''
+
+  if (role === 'accountant') {
+    systemPrompt = `Ты парсер финансовых данных. Извлеки структурированные данные и верни ТОЛЬКО JSON.
+Важно: разделяй валюты, разделяй расходы и доходы, отмечай инвестиции.
+Формат:
+{
+  "type": "expense" | "income" | "investment" | "mixed",
+  "items": [{"amount": 500, "currency": "THB", "category": "еда", "type": "expense"}],
+  "totals": {
+    "expense_thb": 0, "expense_rub": 0, "expense_usd": 0,
+    "income_thb": 0, "income_rub": 0, "income_usd": 0,
+    "investment_rub": 0, "investment_usd": 0
+  }
+}
+Если валюта не указана — определи по контексту (бат=THB, рубль/руб=RUB, доллар/$=USD).
+Если не можешь распознать — верни {}`
+  } else if (role === 'trainer') {
+    systemPrompt = `Ты парсер данных о здоровье. Верни ТОЛЬКО JSON:
+{"calories": 1800, "workout": "бег 30 мин", "water_liters": 1.5, "weight_kg": null, "steps": null}
+Если данных нет — верни {}`
+  } else if (role === 'secretary') {
+    systemPrompt = `Ты парсер задач и дедлайнов. Верни ТОЛЬКО JSON:
+{"task": "название задачи", "amount": 1500, "currency": "RUB", "deadline": "2026-04-30", "priority": "high"|"medium"|"low"}
+Если данных нет — верни {}`
+  } else if (role === 'chef') {
+    systemPrompt = `Ты парсер данных о питании. Верни ТОЛЬКО JSON:
+{"meal": "название блюда", "calories": 500, "protein": 30, "carbs": 40, "fat": 15, "ingredients": []}
+Если данных нет — верни {}`
+  } else {
+    systemPrompt = `Извлеки структурированные данные и верни ТОЛЬКО JSON без лишнего текста. Если не можешь — верни {}`
+  }
+
   const response = await groq.chat.completions.create({
     model: MODEL,
     messages: [
-      {
-        role: 'system',
-        content: `Ты парсер данных. Пользователь говорит своему гремлину (роль: ${role}) что-то.
-Извлеки структурированные данные и верни ТОЛЬКО JSON без лишнего текста.
-Например для бухгалтера: {"items": [{"amount": 650, "category": "такси"}, {"amount": 200, "category": "кофе"}], "total": 850}
-Для тренера: {"calories": 1800, "workout": "бег 30 мин", "water_liters": 1.5}
-Для секретаря: {"task": "штраф ГИБДД", "amount": 1500, "deadline": "2026-04-30"}
-Если не можешь распознать — верни {}`
-      },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content }
     ],
-    max_tokens: 300
+    max_tokens: 400
   })
 
   try {
-    return JSON.parse(response.choices[0].message.content)
+    const text = response.choices[0].message.content.trim()
+    const clean = text.replace(/```json|```/g, '').trim()
+    return JSON.parse(clean)
   } catch {
     return {}
   }
