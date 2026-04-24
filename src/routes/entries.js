@@ -33,16 +33,23 @@ router.post('/chat', async (req, res) => {
 
   if (gremlinError) return res.status(404).json({ error: 'Gremlin not found' })
 
+  // Подгружаем всех остальных гремлинов юзера для контекста
+  const { data: allGremlins } = await supabase
+    .from('gremlins')
+    .select('id, name, role, stats')
+    .eq('user_id', gremlin.user_id)
+    .neq('id', gremlin_id)
+
   const { data: recentEntries } = await supabase
     .from('entries')
     .select('content, entry_date')
     .eq('gremlin_id', gremlin_id)
-    .order('entry_date', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(20)
 
   const [parsed, reply] = await Promise.all([
     parseEntry(gremlin.role, content),
-    chatWithGremlin(gremlin, content, recentEntries || [])
+    chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [])
   ])
 
   const { data: entry, error: entryError } = await supabase
@@ -65,7 +72,6 @@ function mergeStats(current, parsed, role) {
   const stats = { ...current }
 
   if (role === 'accountant') {
-    // Новый умный формат с валютами
     if (parsed.totals) {
       const t = parsed.totals
       stats.expense_thb = (stats.expense_thb || 0) + (t.expense_thb || 0)
@@ -76,12 +82,10 @@ function mergeStats(current, parsed, role) {
       stats.income_usd = (stats.income_usd || 0) + (t.income_usd || 0)
       stats.investment_rub = (stats.investment_rub || 0) + (t.investment_rub || 0)
       stats.investment_usd = (stats.investment_usd || 0) + (t.investment_usd || 0)
-      // Остаток по каждой валюте
       stats.balance_thb = (stats.income_thb || 0) - (stats.expense_thb || 0)
       stats.balance_rub = (stats.income_rub || 0) - (stats.expense_rub || 0)
       stats.balance_usd = (stats.income_usd || 0) - (stats.expense_usd || 0)
     } else if (parsed.total) {
-      // Старый формат — для совместимости
       stats.today_total = (stats.today_total || 0) + parsed.total
       stats.week_total = (stats.week_total || 0) + parsed.total
     }

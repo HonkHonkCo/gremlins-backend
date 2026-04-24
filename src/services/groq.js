@@ -3,10 +3,22 @@ import Groq from 'groq-sdk'
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
 
-export async function chatWithGremlin(gremlin, userMessage, recentEntries) {
+export async function chatWithGremlin(gremlin, userMessage, recentEntries, otherGremlins = []) {
   const entriesText = recentEntries
     .map(e => `${e.entry_date}: ${e.content}`)
     .join('\n')
+
+  // Контекст от других гремлинов
+  const otherContext = otherGremlins.length > 0
+    ? '\n\nДанные от других гремлинов пользователя:\n' + otherGremlins.map(g => {
+        const stats = g.stats || {}
+        const statsText = Object.entries(stats)
+          .filter(([k]) => k !== 'last_updated')
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(', ')
+        return `- ${g.name} (${g.role}): ${statsText || 'нет данных'}`
+      }).join('\n')
+    : ''
 
   const response = await groq.chat.completions.create({
     model: MODEL,
@@ -17,9 +29,10 @@ export async function chatWithGremlin(gremlin, userMessage, recentEntries) {
 ${gremlin.description ? `Описание: ${gremlin.description}` : ''}
 Ты запоминаешь информацию которую тебе даёт пользователь и отвечаешь коротко и по делу.
 Говори на русском. Будь немного с характером — ты гремлин, не скучный бот.
+Если данные от других гремлинов помогают ответить лучше — используй их, но не перегружай ответ.
 
 Последние записи которые ты помнишь:
-${entriesText || 'Пока ничего нет.'}`
+${entriesText || 'Пока ничего нет.'}${otherContext}`
       },
       { role: 'user', content: userMessage }
     ],
@@ -57,7 +70,7 @@ export async function parseEntry(role, content) {
 Если данных нет — верни {}`
   } else if (role === 'chef') {
     systemPrompt = `Ты парсер данных о питании. Верни ТОЛЬКО JSON:
-{"meal": "название блюда", "calories": 500, "protein": 30, "carbs": 40, "fat": 15, "ingredients": []}
+{"meal": "название блюда", "calories": 500, "protein": 30, "carbs": 40, "fat": 15}
 Если данных нет — верни {}`
   } else {
     systemPrompt = `Извлеки структурированные данные и верни ТОЛЬКО JSON без лишнего текста. Если не можешь — верни {}`
