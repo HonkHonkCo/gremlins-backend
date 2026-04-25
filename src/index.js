@@ -1,11 +1,11 @@
 import './env.js';
 import express from 'express';
 import cors from 'cors';
-
 import usersRouter from './routes/users.js';
 import gremlinsRouter from './routes/gremlins.js';
 import entriesRouter from './routes/entries.js';
 import reportsRouter from './routes/reports.js';
+import paymentsRouter from './routes/payments.js';
 import { startWeeklyReportCron } from './services/cron.js';
 
 const app = express();
@@ -18,13 +18,14 @@ app.get('/', (_req, res) => {
   res.status(200).json({
     ok: true,
     service: 'gremlins-base-backend',
-    hint: 'Корень без данных — откройте конкретный путь или используйте POST из PowerShell/Postman.',
     paths: {
-      auth: 'POST /users/auth  body: { telegram_id, initData? }',
-      gremlinsList: 'GET /gremlins?telegram_id=...',
-      gremlinCreate: 'POST /gremlins  body: { telegram_id, name, notes? }',
-      entryCreate: 'POST /entries  body: { telegram_id, gremlin_id, text }',
-      reportWeekly: 'GET /reports/weekly?telegram_id=...',
+      sync: 'POST /users/sync',
+      gremlinsList: 'GET /gremlins?user_id=...',
+      gremlinCreate: 'POST /gremlins',
+      chat: 'POST /entries/chat',
+      reportWeekly: 'GET /reports/weekly?user_id=...',
+      invoice: 'POST /payments/invoice',
+      webhook: 'POST /payments/webhook',
     },
   });
 });
@@ -33,6 +34,7 @@ app.use('/users', usersRouter);
 app.use('/gremlins', gremlinsRouter);
 app.use('/entries', entriesRouter);
 app.use('/reports', reportsRouter);
+app.use('/payments', paymentsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: 'Not found' });
@@ -46,4 +48,17 @@ app.use((err, _req, res, _next) => {
 app.listen(port, () => {
   console.log(`Gremlins Base API listening on http://localhost:${port}`);
   startWeeklyReportCron();
+
+  // Устанавливаем webhook для Telegram
+  const botToken = process.env.TELEGRAM_BOT_TOKEN
+  const webhookUrl = process.env.WEBHOOK_URL
+  if (botToken && webhookUrl) {
+    fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: `${webhookUrl}/payments/webhook` })
+    }).then(r => r.json()).then(d => {
+      console.log('[webhook]', d.ok ? 'set successfully' : d.description)
+    }).catch(e => console.error('[webhook error]', e))
+  }
 });
