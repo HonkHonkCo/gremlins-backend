@@ -3,6 +3,9 @@ import supabase from '../services/supabase.js'
 
 const router = Router()
 
+const FREE_GREMLINS = 3
+const PRO_GREMLINS = 12
+
 router.get('/', async (req, res) => {
   const { user_id } = req.query
   if (!user_id) return res.status(400).json({ error: 'user_id required' })
@@ -21,6 +24,29 @@ router.post('/', async (req, res) => {
   const { user_id, role, name, description } = req.body
   if (!user_id || !role || !name) {
     return res.status(400).json({ error: 'user_id, role, name required' })
+  }
+
+  // Проверяем план и лимит гремлинов
+  const { data: user } = await supabase
+    .from('users')
+    .select('plan')
+    .eq('id', user_id)
+    .single()
+
+  const maxGremlins = user?.plan === 'pro' ? PRO_GREMLINS : FREE_GREMLINS
+
+  const { count } = await supabase
+    .from('gremlins')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', user_id)
+
+  if (count >= maxGremlins) {
+    return res.status(403).json({
+      error: 'limit_reached',
+      message: `Max gremlins reached (${maxGremlins}). Upgrade to Pro for more.`,
+      limit: maxGremlins,
+      plan: user?.plan || 'free'
+    })
   }
 
   const { data, error } = await supabase

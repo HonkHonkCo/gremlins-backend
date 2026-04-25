@@ -3,6 +3,7 @@ import supabase from '../services/supabase.js'
 import { chatWithGremlin, parseEntry } from '../services/groq.js'
 
 const router = Router()
+const FREE_MESSAGES = 20
 
 router.get('/', async (req, res) => {
   const { gremlin_id, limit = 30 } = req.query
@@ -26,26 +27,44 @@ router.post('/chat', async (req, res) => {
   }
 
   const { data: gremlin, error: gremlinError } = await supabase
-    .from('gremlins')
-    .select('*')
-    .eq('id', gremlin_id)
-    .single()
+    .from('gremlins').select('*').eq('id', gremlin_id).single()
 
   if (gremlinError) return res.status(404).json({ error: 'Gremlin not found' })
 
-  // Подгружаем всех остальных гремлинов юзера для контекста
+  // Проверяем лимит сообщений
+  const { data: user } = await supabase
+    .from('users').select('plan, messages_today, messages_date').eq('id', gremlin.user_id).single()
+
+  if (user && user.plan !== 'pro') {
+    const today = new Date().toISOString().split('T')[0]
+    const messagesUsed = user.messages_date === today ? (user.messages_today || 0) : 0
+
+    if (messagesUsed >= FREE_MESSAGES) {
+      return res.status(403).json({
+        error: 'message_limit_reached',
+        message: `Daily message limit reached (${FREE_MESSAGES}). Upgrade to Pro for unlimited messages.`,
+        used: messagesUsed,
+        limit: FREE_MESSAGES
+      })
+    }
+
+    // Увеличиваем счётчик
+    await supabase
+      .from('users')
+      .update({
+        messages_today: messagesUsed + 1,
+        messages_date: today
+      })
+      .eq('id', gremlin.user_id)
+  }
+
+  // Подгружаем других гремлинов для контекста
   const { data: allGremlins } = await supabase
-    .from('gremlins')
-    .select('id, name, role, stats')
-    .eq('user_id', gremlin.user_id)
-    .neq('id', gremlin_id)
+    .from('gremlins').select('id, name, role, stats').eq('user_id', gremlin.user_id).neq('id', gremlin_id)
 
   const { data: recentEntries } = await supabase
-    .from('entries')
-    .select('content, entry_date')
-    .eq('gremlin_id', gremlin_id)
-    .order('created_at', { ascending: false })
-    .limit(20)
+    .from('entries').select('content, entry_date').eq('gremlin_id', gremlin_id)
+    .order('created_at', { ascending: false }).limit(20)
 
   const [parsed, reply] = await Promise.all([
     parseEntry(gremlin.role, content),
@@ -53,10 +72,7 @@ router.post('/chat', async (req, res) => {
   ])
 
   const { data: entry, error: entryError } = await supabase
-    .from('entries')
-    .insert({ gremlin_id, content, parsed_data: parsed })
-    .select()
-    .single()
+    .from('entries').insert({ gremlin_id, content, parsed_data: parsed }).select().single()
 
   if (entryError) return res.status(500).json({ error: entryError.message })
 
