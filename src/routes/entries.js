@@ -88,6 +88,7 @@ function mergeStats(current, parsed, role) {
   const stats = { ...current }
 
   if (role === 'accountant') {
+    // Поддержка формата с totals
     if (parsed.totals) {
       const t = parsed.totals
       stats.expense_thb = (stats.expense_thb || 0) + (t.expense_thb || 0)
@@ -98,22 +99,49 @@ function mergeStats(current, parsed, role) {
       stats.income_usd = (stats.income_usd || 0) + (t.income_usd || 0)
       stats.investment_rub = (stats.investment_rub || 0) + (t.investment_rub || 0)
       stats.investment_usd = (stats.investment_usd || 0) + (t.investment_usd || 0)
-      stats.balance_thb = (stats.income_thb || 0) - (stats.expense_thb || 0)
-      stats.balance_rub = (stats.income_rub || 0) - (stats.expense_rub || 0)
-      stats.balance_usd = (stats.income_usd || 0) - (stats.expense_usd || 0)
-    } else if (parsed.total) {
-      stats.today_total = (stats.today_total || 0) + parsed.total
-      stats.week_total = (stats.week_total || 0) + parsed.total
     }
+    // Поддержка формата с items (основной для файлов и текста)
+    if (parsed.items && Array.isArray(parsed.items)) {
+      for (const item of parsed.items) {
+        const amount = item.amount || 0
+        const currency = (item.currency || 'THB').toUpperCase()
+        const type = item.type || 'expense'
+
+        if (type === 'expense') {
+          if (currency === 'THB') stats.expense_thb = (stats.expense_thb || 0) + amount
+          else if (currency === 'RUB') stats.expense_rub = (stats.expense_rub || 0) + amount
+          else if (currency === 'USD') stats.expense_usd = (stats.expense_usd || 0) + amount
+        } else if (type === 'income') {
+          if (currency === 'THB') stats.income_thb = (stats.income_thb || 0) + amount
+          else if (currency === 'RUB') stats.income_rub = (stats.income_rub || 0) + amount
+          else if (currency === 'USD') stats.income_usd = (stats.income_usd || 0) + amount
+        } else if (type === 'investment') {
+          if (currency === 'RUB') stats.investment_rub = (stats.investment_rub || 0) + amount
+          else if (currency === 'USD') stats.investment_usd = (stats.investment_usd || 0) + amount
+        }
+      }
+    }
+    // Старый формат total
+    if (parsed.total && !parsed.items && !parsed.totals) {
+      stats.expense_thb = (stats.expense_thb || 0) + parsed.total
+    }
+    // Пересчитываем балансы
+    stats.balance_thb = (stats.income_thb || 0) - (stats.expense_thb || 0)
+    stats.balance_rub = (stats.income_rub || 0) - (stats.expense_rub || 0)
+    stats.balance_usd = (stats.income_usd || 0) - (stats.expense_usd || 0)
     stats.last_updated = new Date().toISOString().split('T')[0]
   }
 
   if (role === 'trainer') {
-    if (parsed.calories) stats.last_calories = parsed.calories
-    if (parsed.workout) stats.last_workout = parsed.workout
-    if (parsed.water_liters) stats.last_water = parsed.water_liters
-    if (parsed.weight_kg) stats.weight_kg = parsed.weight_kg
-    if (parsed.steps) stats.steps = parsed.steps
+    // Обновляем только то что реально пришло (не null)
+    if (parsed.calories != null) stats.last_calories = parsed.calories
+    if (parsed.workout != null) stats.last_workout = parsed.workout
+    if (parsed.water_liters != null) stats.last_water = parsed.water_liters
+    if (parsed.weight_kg != null) stats.weight_kg = parsed.weight_kg
+    if (parsed.steps != null) stats.steps = parsed.steps
+    if (parsed.pushups != null) stats.last_pushups = parsed.pushups
+    if (parsed.distance_km != null) stats.last_distance_km = parsed.distance_km
+    stats.last_updated = new Date().toISOString().split('T')[0]
   }
 
   if (role === 'secretary') {
@@ -125,9 +153,9 @@ function mergeStats(current, parsed, role) {
   }
 
   if (role === 'chef') {
-    if (parsed.calories) stats.last_calories = parsed.calories
+    if (parsed.calories != null) stats.last_calories = parsed.calories
     if (parsed.meal) stats.last_meal = parsed.meal
-    if (parsed.protein) stats.last_protein = parsed.protein
+    if (parsed.protein != null) stats.last_protein = parsed.protein
   }
 
   return stats

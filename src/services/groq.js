@@ -3,22 +3,10 @@ import Groq from 'groq-sdk'
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
 
-export async function chatWithGremlin(gremlin, userMessage, recentEntries, otherGremlins = []) {
+export async function chatWithGremlin(gremlin, userMessage, recentEntries) {
   const entriesText = recentEntries
     .map(e => `${e.entry_date}: ${e.content}`)
     .join('\n')
-
-  // Контекст от других гремлинов
-  const otherContext = otherGremlins.length > 0
-    ? '\n\nДанные от других гремлинов пользователя:\n' + otherGremlins.map(g => {
-        const stats = g.stats || {}
-        const statsText = Object.entries(stats)
-          .filter(([k]) => k !== 'last_updated')
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(', ')
-        return `- ${g.name} (${g.role}): ${statsText || 'нет данных'}`
-      }).join('\n')
-    : ''
 
   const response = await groq.chat.completions.create({
     model: MODEL,
@@ -29,10 +17,9 @@ export async function chatWithGremlin(gremlin, userMessage, recentEntries, other
 ${gremlin.description ? `Описание: ${gremlin.description}` : ''}
 Ты запоминаешь информацию которую тебе даёт пользователь и отвечаешь коротко и по делу.
 Говори на русском. Будь немного с характером — ты гремлин, не скучный бот.
-Если данные от других гремлинов помогают ответить лучше — используй их, но не перегружай ответ.
 
 Последние записи которые ты помнишь:
-${entriesText || 'Пока ничего нет.'}${otherContext}`
+${entriesText || 'Пока ничего нет.'}`
       },
       { role: 'user', content: userMessage }
     ],
@@ -46,11 +33,12 @@ export async function parseEntry(role, content) {
   let systemPrompt = ''
 
   if (role === 'accountant') {
-    systemPrompt = `Ты парсер финансовых данных. Извлеки структурированные данные и верни ТОЛЬКО JSON.
-Важно: разделяй валюты, разделяй расходы и доходы, отмечай инвестиции.
-Формат:
+    systemPrompt = `Ты парсер финансовых данных. Пользователь передаёт информацию о расходах, доходах или инвестициях — текстом или из файла.
+Твоя задача: извлечь ВСЕ суммы и вернуть ТОЛЬКО JSON.
+ВАЖНО: определяй валюту по контексту: ฿/бат/baht = THB, руб/рублей/₽ = RUB, $/USD/долл = USD. Если не указана — THB (по умолчанию для Таиланда).
+Разделяй расходы (трата, купил, заплатил, потратил) и доходы (получил, зарплата, доход).
+Формат ответа:
 {
-  "type": "expense" | "income" | "investment" | "mixed",
   "items": [{"amount": 500, "currency": "THB", "category": "еда", "type": "expense"}],
   "totals": {
     "expense_thb": 0, "expense_rub": 0, "expense_usd": 0,
@@ -58,22 +46,24 @@ export async function parseEntry(role, content) {
     "investment_rub": 0, "investment_usd": 0
   }
 }
-Если валюта не указана — определи по контексту (бат=THB, рубль/руб=RUB, доллар/$=USD).
-Если не можешь распознать — верни {}`
+Если данных нет — верни {}`
   } else if (role === 'trainer') {
-    systemPrompt = `Ты парсер данных о здоровье. Верни ТОЛЬКО JSON:
-{"calories": 1800, "workout": "бег 30 мин", "water_liters": 1.5, "weight_kg": null, "steps": null}
+    systemPrompt = `Ты парсер данных о тренировках и здоровье. Извлекай ТОЛЬКО то, что пользователь реально сообщил.
+НЕ придумывай данные которых нет в сообщении. Если пользователь написал только про бег — не добавляй воду и калории.
+Верни ТОЛЬКО JSON:
+{"calories": null, "workout": null, "water_liters": null, "weight_kg": null, "steps": null, "pushups": null, "distance_km": null}
+Заполняй только те поля, о которых говорит пользователь. Остальные оставь null.
 Если данных нет — верни {}`
   } else if (role === 'secretary') {
     systemPrompt = `Ты парсер задач и дедлайнов. Верни ТОЛЬКО JSON:
-{"task": "название задачи", "amount": 1500, "currency": "RUB", "deadline": "2026-04-30", "priority": "high"|"medium"|"low"}
+{"task": "название задачи", "amount": null, "currency": null, "deadline": null, "priority": "medium"}
 Если данных нет — верни {}`
   } else if (role === 'chef') {
     systemPrompt = `Ты парсер данных о питании. Верни ТОЛЬКО JSON:
-{"meal": "название блюда", "calories": 500, "protein": 30, "carbs": 40, "fat": 15}
+{"meal": "название блюда", "calories": null, "protein": null, "carbs": null, "fat": null}
 Если данных нет — верни {}`
   } else {
-    systemPrompt = `Извлеки структурированные данные и верни ТОЛЬКО JSON без лишнего текста. Если не можешь — верни {}`
+    systemPrompt = `Извлеки структурированные данные и верни ТОЛЬКО JSON. Если не можешь — верни {}`
   }
 
   const response = await groq.chat.completions.create({
@@ -82,13 +72,11 @@ export async function parseEntry(role, content) {
       { role: 'system', content: systemPrompt },
       { role: 'user', content }
     ],
-    max_tokens: 400
+    max_tokens: 600
   })
 
   try {
-    const text = response.choices[0].message.content.trim()
-    const clean = text.replace(/```json|```/g, '').trim()
-    return JSON.parse(clean)
+    return JSON.parse(response.choices[0].message.content)
   } catch {
     return {}
   }
