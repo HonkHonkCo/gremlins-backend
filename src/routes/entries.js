@@ -64,8 +64,9 @@ router.post('/chat', async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(20)
 
+  // Для файлов тоже парсим — но передаём флаг чтобы промпт знал что это большой файл
   const [parsed, reply] = await Promise.all([
-    is_file ? Promise.resolve({}) : parseEntry(gremlin.role, content),
+    parseEntry(gremlin.role, content, !!is_file),
     chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [])
   ])
 
