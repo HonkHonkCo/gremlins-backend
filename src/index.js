@@ -7,6 +7,7 @@ import entriesRouter from './routes/entries.js';
 import reportsRouter from './routes/reports.js';
 import paymentsRouter from './routes/payments.js';
 import { startWeeklyReportCron } from './services/cron.js';
+import './services/push.js';
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;

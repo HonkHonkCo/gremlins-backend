@@ -6,12 +6,12 @@ const router = Router()
 const FREE_MESSAGES = 20
 
 router.get('/', async (req, res) => {
-  const { gremlin_id, limit = 30 } = req.query
+  const { gremlin_id, limit = 60 } = req.query
   if (!gremlin_id) return res.status(400).json({ error: 'gremlin_id required' })
 
   const { data, error } = await supabase
     .from('entries')
-    .select('*')
+    .select('id, content, reply, is_file, entry_date, created_at')
     .eq('gremlin_id', gremlin_id)
     .order('created_at', { ascending: false })
     .limit(limit)
@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
 })
 
 router.post('/chat', async (req, res) => {
-  const { gremlin_id, content } = req.body
+  const { gremlin_id, content, is_file } = req.body
   if (!gremlin_id || !content) {
     return res.status(400).json({ error: 'gremlin_id and content required' })
   }
@@ -31,7 +31,6 @@ router.post('/chat', async (req, res) => {
 
   if (gremlinError) return res.status(404).json({ error: 'Gremlin not found' })
 
-  // Проверяем лимит сообщений
   const { data: user } = await supabase
     .from('users').select('plan, messages_today, messages_date').eq('id', gremlin.user_id).single()
 
@@ -48,47 +47,61 @@ router.post('/chat', async (req, res) => {
       })
     }
 
-    // Увеличиваем счётчик
     await supabase
       .from('users')
-      .update({
-        messages_today: messagesUsed + 1,
-        messages_date: today
-      })
+      .update({ messages_today: messagesUsed + 1, messages_date: today })
       .eq('id', gremlin.user_id)
   }
 
-  // Подгружаем других гремлинов для контекста
   const { data: allGremlins } = await supabase
     .from('gremlins').select('id, name, role, stats').eq('user_id', gremlin.user_id).neq('id', gremlin_id)
 
   const { data: recentEntries } = await supabase
-    .from('entries').select('content, entry_date').eq('gremlin_id', gremlin_id)
-    .order('created_at', { ascending: false }).limit(20)
+    .from('entries')
+    .select('content, reply, entry_date')
+    .eq('gremlin_id', gremlin_id)
+    .eq('is_file', false)
+    .order('created_at', { ascending: false })
+    .limit(20)
 
   const [parsed, reply] = await Promise.all([
-    parseEntry(gremlin.role, content),
+    is_file ? Promise.resolve({}) : parseEntry(gremlin.role, content),
     chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [])
   ])
 
+  // Для файлов сохраняем только короткое описание, не весь контент
+  const contentToSave = is_file
+    ? content.slice(0, 200) + (content.length > 200 ? '...[файл]' : '')
+    : content
+
   const { data: entry, error: entryError } = await supabase
-    .from('entries').insert({ gremlin_id, content, parsed_data: parsed }).select().single()
+    .from('entries')
+    .insert({
+      gremlin_id,
+      content: contentToSave,
+      reply,
+      is_file: !!is_file,
+      parsed_data: parsed,
+      entry_date: new Date().toISOString().split('T')[0]
+    })
+    .select()
+    .single()
 
   if (entryError) return res.status(500).json({ error: entryError.message })
 
+  let updatedStats = gremlin.stats || {}
   if (parsed && Object.keys(parsed).length > 0) {
-    const updatedStats = mergeStats(gremlin.stats || {}, parsed, gremlin.role)
-    await supabase.from('gremlins').update({ stats: updatedStats }).eq('id', gremlin_id)
+    updatedStats = mergeStats(gremlin.stats || {}, parsed, gremlin.role)
+    await supabase.from('gremlins').update({ stats: updatedStats, updated_at: new Date().toISOString() }).eq('id', gremlin_id)
   }
 
-  res.json({ entry, reply })
+  res.json({ entry, reply, stats: updatedStats })
 })
 
 function mergeStats(current, parsed, role) {
   const stats = { ...current }
 
   if (role === 'accountant') {
-    // Поддержка формата с totals
     if (parsed.totals) {
       const t = parsed.totals
       stats.expense_thb = (stats.expense_thb || 0) + (t.expense_thb || 0)
@@ -100,13 +113,11 @@ function mergeStats(current, parsed, role) {
       stats.investment_rub = (stats.investment_rub || 0) + (t.investment_rub || 0)
       stats.investment_usd = (stats.investment_usd || 0) + (t.investment_usd || 0)
     }
-    // Поддержка формата с items (основной для файлов и текста)
     if (parsed.items && Array.isArray(parsed.items)) {
       for (const item of parsed.items) {
         const amount = item.amount || 0
         const currency = (item.currency || 'THB').toUpperCase()
         const type = item.type || 'expense'
-
         if (type === 'expense') {
           if (currency === 'THB') stats.expense_thb = (stats.expense_thb || 0) + amount
           else if (currency === 'RUB') stats.expense_rub = (stats.expense_rub || 0) + amount
@@ -121,11 +132,9 @@ function mergeStats(current, parsed, role) {
         }
       }
     }
-    // Старый формат total
     if (parsed.total && !parsed.items && !parsed.totals) {
       stats.expense_thb = (stats.expense_thb || 0) + parsed.total
     }
-    // Пересчитываем балансы
     stats.balance_thb = (stats.income_thb || 0) - (stats.expense_thb || 0)
     stats.balance_rub = (stats.income_rub || 0) - (stats.expense_rub || 0)
     stats.balance_usd = (stats.income_usd || 0) - (stats.expense_usd || 0)
@@ -133,7 +142,6 @@ function mergeStats(current, parsed, role) {
   }
 
   if (role === 'trainer') {
-    // Обновляем только то что реально пришло (не null)
     if (parsed.calories != null) stats.last_calories = parsed.calories
     if (parsed.workout != null) stats.last_workout = parsed.workout
     if (parsed.water_liters != null) stats.last_water = parsed.water_liters

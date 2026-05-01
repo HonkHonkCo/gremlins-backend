@@ -59,6 +59,18 @@ router.post('/', async (req, res) => {
   res.json(data)
 })
 
+router.get('/:id', async (req, res) => {
+  const { id } = req.params
+  const { data, error } = await supabase
+    .from('gremlins')
+    .select('*')
+    .eq('id', id)
+    .single()
+
+  if (error) return res.status(404).json({ error: 'Gremlin not found' })
+  res.json(data)
+})
+
 router.patch('/:id', async (req, res) => {
   const { name, description } = req.body
   const { data, error } = await supabase
