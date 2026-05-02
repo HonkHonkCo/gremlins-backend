@@ -187,3 +187,43 @@ export async function generateGremlinAdvice(gremlin) {
 
   return response.choices[0].message.content
 }
+
+// AI определяет валюты по меткам — минимальный промпт, ~50 токенов входа
+export async function resolvecurrencies(groups) {
+  const groupsText = Object.entries(groups)
+    .map(([label, g]) => {
+      const parts = []
+      if (g.expense > 0) parts.push('расход=' + g.expense)
+      if (g.income > 0) parts.push('доход=' + g.income)
+      return '"' + label + '": ' + parts.join(', ') + (g.samples.length ? ' (пример: ' + g.samples[0] + ')' : '')
+    })
+    .join('\n')
+
+  const response = await groq.chat.completions.create({
+    model: MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: 'Ты определяешь ISO-код валюты по текстовой метке из финансовых записей.\n' +
+          'Известные метки: рп/rp/idr→IDR, $→USD, руб/р/₽/rub→RUB, бат/฿/thb→THB, €/eur/евро→EUR, £/gbp→GBP\n' +
+          'Если метка неизвестна — угадай по контексту примера или напиши "?".\n\n' +
+          'Верни ТОЛЬКО JSON массив:\n' +
+          '[{"label":"рп","iso":"IDR","expense":45000,"income":0},{"label":"$","iso":"USD","expense":127.5,"income":50}]\n' +
+          'Не добавляй комментариев, только JSON.'
+      },
+      { role: 'user', content: groupsText }
+    ],
+    max_tokens: 300
+  })
+
+  try {
+    const text = response.choices[0].message.content.trim()
+    const clean = text.replace(/^```json\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '')
+    const result = JSON.parse(clean)
+    // Возвращаем массив и список непонятных меток
+    const unknown = result.filter(r => r.iso === '?').map(r => r.label)
+    return { resolved: result.filter(r => r.iso !== '?'), unknown }
+  } catch {
+    return { resolved: [], unknown: Object.keys(groups) }
+  }
+}
