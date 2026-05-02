@@ -37,24 +37,22 @@ router.post('/chat', async (req, res) => {
   if (user && user.plan !== 'pro') {
     const today = new Date().toISOString().split('T')[0]
     const messagesUsed = user.messages_date === today ? (user.messages_today || 0) : 0
-
     if (messagesUsed >= FREE_MESSAGES) {
       return res.status(403).json({
         error: 'message_limit_reached',
-        message: `Daily message limit reached (${FREE_MESSAGES}). Upgrade to Pro for unlimited messages.`,
+        message: 'Daily message limit reached. Upgrade to Pro.',
         used: messagesUsed,
         limit: FREE_MESSAGES
       })
     }
-
-    await supabase
-      .from('users')
+    await supabase.from('users')
       .update({ messages_today: messagesUsed + 1, messages_date: today })
       .eq('id', gremlin.user_id)
   }
 
   const { data: allGremlins } = await supabase
-    .from('gremlins').select('id, name, role, stats').eq('user_id', gremlin.user_id).neq('id', gremlin_id)
+    .from('gremlins').select('id, name, role, stats')
+    .eq('user_id', gremlin.user_id).neq('id', gremlin_id)
 
   const { data: recentEntries } = await supabase
     .from('entries')
@@ -64,15 +62,13 @@ router.post('/chat', async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(20)
 
-  // Для файлов тоже парсим — но передаём флаг чтобы промпт знал что это большой файл
   const [parsed, reply] = await Promise.all([
     parseEntry(gremlin.role, content, !!is_file),
     chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [])
   ])
 
-  // Для файлов сохраняем только короткое описание, не весь контент
   const contentToSave = is_file
-    ? content.slice(0, 200) + (content.length > 200 ? '...[файл]' : '')
+    ? content.slice(0, 300) + (content.length > 300 ? '...[файл]' : '')
     : content
 
   const { data: entry, error: entryError } = await supabase
@@ -85,15 +81,16 @@ router.post('/chat', async (req, res) => {
       parsed_data: parsed,
       entry_date: new Date().toISOString().split('T')[0]
     })
-    .select()
-    .single()
+    .select().single()
 
   if (entryError) return res.status(500).json({ error: entryError.message })
 
   let updatedStats = gremlin.stats || {}
   if (parsed && Object.keys(parsed).length > 0) {
     updatedStats = mergeStats(gremlin.stats || {}, parsed, gremlin.role)
-    await supabase.from('gremlins').update({ stats: updatedStats, updated_at: new Date().toISOString() }).eq('id', gremlin_id)
+    await supabase.from('gremlins')
+      .update({ stats: updatedStats, updated_at: new Date().toISOString() })
+      .eq('id', gremlin_id)
   }
 
   res.json({ entry, reply, stats: updatedStats })
@@ -103,42 +100,33 @@ function mergeStats(current, parsed, role) {
   const stats = { ...current }
 
   if (role === 'accountant') {
-    if (parsed.totals) {
-      const t = parsed.totals
-      stats.expense_thb = (stats.expense_thb || 0) + (t.expense_thb || 0)
-      stats.expense_rub = (stats.expense_rub || 0) + (t.expense_rub || 0)
-      stats.expense_usd = (stats.expense_usd || 0) + (t.expense_usd || 0)
-      stats.income_thb = (stats.income_thb || 0) + (t.income_thb || 0)
-      stats.income_rub = (stats.income_rub || 0) + (t.income_rub || 0)
-      stats.income_usd = (stats.income_usd || 0) + (t.income_usd || 0)
-      stats.investment_rub = (stats.investment_rub || 0) + (t.investment_rub || 0)
-      stats.investment_usd = (stats.investment_usd || 0) + (t.investment_usd || 0)
-    }
     if (parsed.items && Array.isArray(parsed.items)) {
       for (const item of parsed.items) {
-        const amount = item.amount || 0
-        const currency = (item.currency || 'THB').toUpperCase()
-        const type = item.type || 'expense'
+        const amount = Math.round((item.amount || 0) * 100) / 100
+        if (amount <= 0) continue
+
+        // Нормализуем валюту — берём ISO код как есть, uppercase
+        const currency = (item.currency || 'UNKNOWN').toUpperCase().trim()
+        if (currency === 'UNKNOWN') continue // пропускаем непонятные
+
+        const type = (item.type || 'expense').toLowerCase()
+        const expKey = 'expense_' + currency.toLowerCase()
+        const incKey = 'income_' + currency.toLowerCase()
+        const balKey = 'balance_' + currency.toLowerCase()
+
         if (type === 'expense') {
-          if (currency === 'THB') stats.expense_thb = (stats.expense_thb || 0) + amount
-          else if (currency === 'RUB') stats.expense_rub = (stats.expense_rub || 0) + amount
-          else if (currency === 'USD') stats.expense_usd = (stats.expense_usd || 0) + amount
+          stats[expKey] = Math.round(((stats[expKey] || 0) + amount) * 100) / 100
         } else if (type === 'income') {
-          if (currency === 'THB') stats.income_thb = (stats.income_thb || 0) + amount
-          else if (currency === 'RUB') stats.income_rub = (stats.income_rub || 0) + amount
-          else if (currency === 'USD') stats.income_usd = (stats.income_usd || 0) + amount
+          stats[incKey] = Math.round(((stats[incKey] || 0) + amount) * 100) / 100
         } else if (type === 'investment') {
-          if (currency === 'RUB') stats.investment_rub = (stats.investment_rub || 0) + amount
-          else if (currency === 'USD') stats.investment_usd = (stats.investment_usd || 0) + amount
+          const invKey = 'investment_' + currency.toLowerCase()
+          stats[invKey] = Math.round(((stats[invKey] || 0) + amount) * 100) / 100
         }
+
+        // Пересчитываем баланс для этой валюты
+        stats[balKey] = Math.round(((stats[incKey] || 0) - (stats[expKey] || 0)) * 100) / 100
       }
     }
-    if (parsed.total && !parsed.items && !parsed.totals) {
-      stats.expense_thb = (stats.expense_thb || 0) + parsed.total
-    }
-    stats.balance_thb = (stats.income_thb || 0) - (stats.expense_thb || 0)
-    stats.balance_rub = (stats.income_rub || 0) - (stats.expense_rub || 0)
-    stats.balance_usd = (stats.income_usd || 0) - (stats.expense_usd || 0)
     stats.last_updated = new Date().toISOString().split('T')[0]
   }
 
