@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
 })
 
 router.post('/chat', async (req, res) => {
-  const { gremlin_id, content, is_file } = req.body
+  const { gremlin_id, content, is_file, parsed_totals, file_name } = req.body
   if (!gremlin_id || !content) {
     return res.status(400).json({ error: 'gremlin_id and content required' })
   }
@@ -62,13 +62,25 @@ router.post('/chat', async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(20)
 
+  // Если фронт уже распарсил файл — используем его данные, не тратим groq токены
+  const parsedFromFront = parsed_totals && Object.keys(parsed_totals).length > 0
+
   const [parsed, reply] = await Promise.all([
-    parseEntry(gremlin.role, content, !!is_file),
+    parsedFromFront
+      ? Promise.resolve({ items: Object.entries(parsed_totals).map(([k, v]) => {
+          const parts = k.split('_')
+          const type = parts[0]
+          const currency = parts.slice(1).join('_').toUpperCase()
+          return { amount: v, currency, type }
+        })}
+      )
+      : parseEntry(gremlin.role, content, !!is_file),
     chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [])
   ])
 
+  // Для файлов сохраняем имя файла как content — в истории покажется как 📎 filename
   const contentToSave = is_file
-    ? content.slice(0, 300) + (content.length > 300 ? '...[файл]' : '')
+    ? (file_name || 'файл')
     : content
 
   const { data: entry, error: entryError } = await supabase
