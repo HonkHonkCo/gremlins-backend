@@ -6,6 +6,7 @@ import gremlinsRouter from './routes/gremlins.js';
 import entriesRouter from './routes/entries.js';
 import reportsRouter from './routes/reports.js';
 import paymentsRouter from './routes/payments.js';
+import transactionsRouter from './routes/transactions.js';
 import { startWeeklyReportCron } from './services/cron.js';
 import './services/push.js';
 
@@ -27,6 +28,7 @@ app.get('/', (_req, res) => {
       reportWeekly: 'GET /reports/weekly?user_id=...',
       invoice: 'POST /payments/invoice',
       webhook: 'POST /payments/webhook',
+      transactions: 'GET/POST /transactions',
     },
   });
 });
@@ -36,6 +38,7 @@ app.use('/gremlins', gremlinsRouter);
 app.use('/entries', entriesRouter);
 app.use('/reports', reportsRouter);
 app.use('/payments', paymentsRouter);
+app.use('/transactions', transactionsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ ok: false, error: 'Not found' });
@@ -50,16 +53,15 @@ app.listen(port, () => {
   console.log(`Gremlins Base API listening on http://localhost:${port}`);
   startWeeklyReportCron();
 
-  // Устанавливаем webhook для Telegram
-  const botToken = process.env.TELEGRAM_BOT_TOKEN
-  const webhookUrl = process.env.WEBHOOK_URL
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  const webhookUrl = process.env.WEBHOOK_URL;
   if (botToken && webhookUrl) {
     fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: `${webhookUrl}/payments/webhook` })
     }).then(r => r.json()).then(d => {
-      console.log('[webhook]', d.ok ? 'set successfully' : d.description)
-    }).catch(e => console.error('[webhook error]', e))
+      console.log('[webhook]', d.ok ? 'set successfully' : d.description);
+    }).catch(e => console.error('[webhook error]', e));
   }
 });
