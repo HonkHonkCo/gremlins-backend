@@ -138,6 +138,26 @@ function mergeStats(current, parsed, role) {
         // Пересчитываем баланс для этой валюты
         stats[balKey] = Math.round(((stats[incKey] || 0) - (stats[expKey] || 0)) * 100) / 100
       }
+
+      // Категории расходов — максимум 10
+      const cats = stats.categories || {}
+      for (const item of parsed.items) {
+        if ((item.type || 'expense') !== 'expense') continue
+        if (!item.category) continue
+        const cat = item.category.toLowerCase().trim().slice(0, 20)
+        if (!cat) continue
+        cats[cat] = Math.round(((cats[cat] || 0) + (item.amount || 0)) * 100) / 100
+      }
+      // Если > 10 — мержим мелкие в "другое"
+      const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1])
+      if (sorted.length > 10) {
+        const top9 = sorted.slice(0, 9)
+        const otherSum = sorted.slice(9).reduce((s, [, v]) => s + v, 0)
+        stats.categories = Object.fromEntries(top9)
+        stats.categories['другое'] = Math.round(((stats.categories['другое'] || 0) + otherSum) * 100) / 100
+      } else {
+        stats.categories = cats
+      }
     }
     stats.last_updated = new Date().toISOString().split('T')[0]
   }
