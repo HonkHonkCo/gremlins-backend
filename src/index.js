@@ -7,6 +7,9 @@ import entriesRouter from './routes/entries.js';
 import reportsRouter from './routes/reports.js';
 import paymentsRouter from './routes/payments.js';
 import transactionsRouter from './routes/transactions.js';
+import workoutsRouter from './routes/workouts.js';
+import mealsRouter from './routes/meals.js';
+import tasksRouter from './routes/tasks.js';
 import { startWeeklyReportCron } from './services/cron.js';
 import './services/push.js';
 
@@ -17,20 +20,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/', (_req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: 'gremlins-base-backend',
-    paths: {
-      sync: 'POST /users/sync',
-      gremlinsList: 'GET /gremlins?user_id=...',
-      gremlinCreate: 'POST /gremlins',
-      chat: 'POST /entries/chat',
-      reportWeekly: 'GET /reports/weekly?user_id=...',
-      invoice: 'POST /payments/invoice',
-      webhook: 'POST /payments/webhook',
-      transactions: 'GET/POST /transactions',
-    },
-  });
+  res.status(200).json({ ok: true, service: 'gremlins-base-backend' });
 });
 
 app.use('/users', usersRouter);
@@ -39,11 +29,11 @@ app.use('/entries', entriesRouter);
 app.use('/reports', reportsRouter);
 app.use('/payments', paymentsRouter);
 app.use('/transactions', transactionsRouter);
+app.use('/workouts', workoutsRouter);
+app.use('/meals', mealsRouter);
+app.use('/tasks', tasksRouter);
 
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: 'Not found' });
-});
-
+app.use((req, res) => { res.status(404).json({ ok: false, error: 'Not found' }); });
 app.use((err, _req, res, _next) => {
   console.error('[unhandled]', err);
   res.status(500).json({ ok: false, error: 'Internal server error' });
@@ -52,7 +42,6 @@ app.use((err, _req, res, _next) => {
 app.listen(port, () => {
   console.log(`Gremlins Base API listening on http://localhost:${port}`);
   startWeeklyReportCron();
-
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   const webhookUrl = process.env.WEBHOOK_URL;
   if (botToken && webhookUrl) {
