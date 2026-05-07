@@ -10,6 +10,9 @@ import transactionsRouter from './routes/transactions.js';
 import workoutsRouter from './routes/workouts.js';
 import mealsRouter from './routes/meals.js';
 import tasksRouter from './routes/tasks.js';
+import accountsRouter from './routes/accounts.js';
+import debtsRouter from './routes/debts.js';
+import snapshotsRouter from './routes/snapshots.js';
 import { startWeeklyReportCron } from './services/cron.js';
 import './services/push.js';
 
@@ -19,9 +22,7 @@ const port = Number(process.env.PORT) || 3000;
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/', (_req, res) => {
-  res.status(200).json({ ok: true, service: 'gremlins-base-backend' });
-});
+app.get('/', (_req, res) => res.status(200).json({ ok: true, service: 'gremlins-base-backend' }));
 
 app.use('/users', usersRouter);
 app.use('/gremlins', gremlinsRouter);
@@ -32,8 +33,11 @@ app.use('/transactions', transactionsRouter);
 app.use('/workouts', workoutsRouter);
 app.use('/meals', mealsRouter);
 app.use('/tasks', tasksRouter);
+app.use('/accounts', accountsRouter);
+app.use('/debts', debtsRouter);
+app.use('/snapshots', snapshotsRouter);
 
-app.use((req, res) => { res.status(404).json({ ok: false, error: 'Not found' }); });
+app.use((req, res) => res.status(404).json({ ok: false, error: 'Not found' }));
 app.use((err, _req, res, _next) => {
   console.error('[unhandled]', err);
   res.status(500).json({ ok: false, error: 'Internal server error' });

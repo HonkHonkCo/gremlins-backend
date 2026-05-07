@@ -1,53 +1,50 @@
 import { Router } from 'express'
 import supabase from '../services/supabase.js'
+import { writeSnapshot } from './snapshots.js'
 
 const router = Router()
 
-// Получить транзакции гремлина
 router.get('/', async (req, res) => {
-  const { gremlin_id, limit = 50 } = req.query
+  const { gremlin_id, type, limit = 50 } = req.query
   if (!gremlin_id) return res.status(400).json({ error: 'gremlin_id required' })
-
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('gremlin_id', gremlin_id)
-    .order('created_at', { ascending: false })
-    .limit(limit)
-
+  let query = supabase.from('transactions').select('*').eq('gremlin_id', gremlin_id).order('date', { ascending: false }).order('created_at', { ascending: false }).limit(limit)
+  if (type) query = query.eq('type', type)
+  const { data, error } = await query
   if (error) return res.status(500).json({ error: error.message })
   res.json(data)
 })
 
-// Добавить транзакцию и пересчитать stats
 router.post('/', async (req, res) => {
-  const { gremlin_id, amount, currency, type, category, note } = req.body
-  if (!gremlin_id || !amount || !currency || !type) {
-    return res.status(400).json({ error: 'gremlin_id, amount, currency, type required' })
-  }
+  const { gremlin_id, amount, currency, type, category, note, date, rate, end_date, account_id, to_account_id } = req.body
+  if (!gremlin_id || !amount || !currency || !type) return res.status(400).json({ error: 'required fields missing' })
 
   const iso = currency.toUpperCase().trim()
   const isoLow = iso.toLowerCase()
   const num = Math.round(parseFloat(amount) * 100) / 100
 
-  const { data: transaction, error } = await supabase
-    .from('transactions')
-    .insert({ gremlin_id, amount: num, currency: iso, type, category: category || null, note: note || null })
+  const { data: transaction, error } = await supabase.from('transactions')
+    .insert({ gremlin_id, amount: num, currency: iso, type, category: category || null, note: note || null, date: date || new Date().toISOString().split('T')[0], rate: rate || null, end_date: end_date || null, account_id: account_id || null, to_account_id: to_account_id || null })
     .select().single()
-
   if (error) return res.status(500).json({ error: error.message })
 
-  // Пересчитываем stats гремлина
+  // Обновляем баланс счёта если указан
+  if (account_id) {
+    const { data: acc } = await supabase.from('accounts').select('balance').eq('id', account_id).single()
+    if (acc) {
+      const delta = type === 'expense' ? -num : type === 'income' ? num : 0
+      await supabase.from('accounts').update({ balance: (acc.balance || 0) + delta }).eq('id', account_id)
+    }
+  }
+
+  // Обновляем stats гремлина
   const { data: gremlin } = await supabase.from('gremlins').select('stats').eq('id', gremlin_id).single()
   const stats = { ...(gremlin?.stats || {}) }
 
   if (type === 'expense') {
     stats['expense_' + isoLow] = Math.round(((stats['expense_' + isoLow] || 0) + num) * 100) / 100
-    // Категория
     const cats = stats.categories || {}
     const cat = (category || 'другое').toLowerCase()
     cats[cat] = Math.round(((cats[cat] || 0) + num) * 100) / 100
-    // Топ 10
     const sorted = Object.entries(cats).sort((a, b) => b[1] - a[1])
     if (sorted.length > 10) {
       const other = sorted.slice(9).reduce((s, [, v]) => s + v, 0)
@@ -62,29 +59,25 @@ router.post('/', async (req, res) => {
     stats['investment_' + isoLow] = Math.round(((stats['investment_' + isoLow] || 0) + num) * 100) / 100
   }
 
-  // Пересчитываем баланс для этой валюты
   stats['balance_' + isoLow] = Math.round(((stats['income_' + isoLow] || 0) - (stats['expense_' + isoLow] || 0)) * 100) / 100
   stats.last_updated = new Date().toISOString().split('T')[0]
 
   await supabase.from('gremlins').update({ stats, updated_at: new Date().toISOString() }).eq('id', gremlin_id)
 
+  // Пишем снапшот для графика
+  await writeSnapshot(gremlin_id, iso, stats['balance_' + isoLow] || 0)
+
   res.json({ transaction, stats })
 })
 
-// Удалить транзакцию и пересчитать stats
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
-  const { gremlin_id } = req.body
-
   const { data: tx } = await supabase.from('transactions').select('*').eq('id', id).single()
   if (!tx) return res.status(404).json({ error: 'Not found' })
-
   await supabase.from('transactions').delete().eq('id', id)
 
-  // Пересчитываем stats с нуля по всем транзакциям
-  const { data: allTx } = await supabase
-    .from('transactions').select('*').eq('gremlin_id', tx.gremlin_id)
-
+  // Пересчёт с нуля
+  const { data: allTx } = await supabase.from('transactions').select('*').eq('gremlin_id', tx.gremlin_id)
   const stats = { categories: {} }
   for (const t of allTx || []) {
     const isoLow = t.currency.toLowerCase()
@@ -98,16 +91,13 @@ router.delete('/:id', async (req, res) => {
       stats['investment_' + isoLow] = Math.round(((stats['investment_' + isoLow] || 0) + t.amount) * 100) / 100
     }
   }
-
-  // Балансы
   const currencies = new Set(Object.keys(stats).filter(k => k.startsWith('expense_') || k.startsWith('income_')).map(k => k.split('_').slice(1).join('_')))
   for (const cur of currencies) {
     stats['balance_' + cur] = Math.round(((stats['income_' + cur] || 0) - (stats['expense_' + cur] || 0)) * 100) / 100
+    await writeSnapshot(tx.gremlin_id, cur.toUpperCase(), stats['balance_' + cur])
   }
   stats.last_updated = new Date().toISOString().split('T')[0]
-
   await supabase.from('gremlins').update({ stats, updated_at: new Date().toISOString() }).eq('id', tx.gremlin_id)
-
   res.json({ success: true, stats })
 })
 
