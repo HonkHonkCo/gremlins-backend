@@ -76,7 +76,31 @@ router.delete('/:id', async (req, res) => {
   if (!tx) return res.status(404).json({ error: 'Not found' })
   await supabase.from('transactions').delete().eq('id', id)
 
-  // Пересчёт с нуля
+  // Пересчёт баланса счёта если транзакция была привязана к счёту
+  if (tx.account_id) {
+    const { data: allAccTx } = await supabase.from('transactions')
+      .select('amount, type')
+      .eq('account_id', tx.account_id)
+    const { data: acc } = await supabase.from('accounts').select('balance').eq('id', tx.account_id).single()
+    if (acc) {
+      // Пересчитываем баланс счёта: начальный баланс + все доходы - все расходы
+      // Начальный баланс берём из текущего и откатываем удалённую транзакцию
+      const delta = tx.type === 'expense' ? tx.amount : tx.type === 'income' ? -tx.amount : 0
+      const newBalance = Math.round(((acc.balance || 0) + delta) * 100) / 100
+      await supabase.from('accounts').update({ balance: newBalance }).eq('id', tx.account_id)
+    }
+  }
+
+  // Также пересчёт to_account при переводе
+  if (tx.to_account_id && tx.type === 'transfer') {
+    const { data: toAcc } = await supabase.from('accounts').select('balance').eq('id', tx.to_account_id).single()
+    if (toAcc) {
+      const newBalance = Math.round(((toAcc.balance || 0) - tx.amount) * 100) / 100
+      await supabase.from('accounts').update({ balance: newBalance }).eq('id', tx.to_account_id)
+    }
+  }
+
+  // Пересчёт stats гремлина с нуля
   const { data: allTx } = await supabase.from('transactions').select('*').eq('gremlin_id', tx.gremlin_id)
   const stats = { categories: {} }
   for (const t of allTx || []) {
