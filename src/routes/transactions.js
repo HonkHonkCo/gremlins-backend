@@ -62,6 +62,20 @@ router.post('/', async (req, res) => {
   stats['balance_' + isoLow] = Math.round(((stats['income_' + isoLow] || 0) - (stats['expense_' + isoLow] || 0)) * 100) / 100
   stats.last_updated = new Date().toISOString().split('T')[0]
 
+  // Пересчитываем реальный баланс по всем счетам этой валюты
+  const { data: allAccounts } = await supabase.from('accounts').select('balance, currency').eq('gremlin_id', gremlin_id)
+  if (allAccounts) {
+    const accByCurrency = {}
+    for (const a of allAccounts) {
+      const cur = a.currency.toLowerCase()
+      accByCurrency[cur] = Math.round(((accByCurrency[cur] || 0) + (a.balance || 0)) * 100) / 100
+    }
+    // balance_xxx = реальный суммарный баланс по всем счетам этой валюты
+    for (const [cur, bal] of Object.entries(accByCurrency)) {
+      stats['balance_' + cur] = bal
+    }
+  }
+
   await supabase.from('gremlins').update({ stats, updated_at: new Date().toISOString() }).eq('id', gremlin_id)
 
   // Пишем снапшот для графика
@@ -120,6 +134,21 @@ router.delete('/:id', async (req, res) => {
     stats['balance_' + cur] = Math.round(((stats['income_' + cur] || 0) - (stats['expense_' + cur] || 0)) * 100) / 100
     await writeSnapshot(tx.gremlin_id, cur.toUpperCase(), stats['balance_' + cur])
   }
+
+  // Перезаписываем balance реальными данными из счетов
+  const { data: allAccounts } = await supabase.from('accounts').select('balance, currency').eq('gremlin_id', tx.gremlin_id)
+  if (allAccounts) {
+    const accByCurrency = {}
+    for (const a of allAccounts) {
+      const cur = a.currency.toLowerCase()
+      accByCurrency[cur] = Math.round(((accByCurrency[cur] || 0) + (a.balance || 0)) * 100) / 100
+    }
+    for (const [cur, bal] of Object.entries(accByCurrency)) {
+      stats['balance_' + cur] = bal
+      await writeSnapshot(tx.gremlin_id, cur.toUpperCase(), bal)
+    }
+  }
+
   stats.last_updated = new Date().toISOString().split('T')[0]
   await supabase.from('gremlins').update({ stats, updated_at: new Date().toISOString() }).eq('id', tx.gremlin_id)
   res.json({ success: true, stats })
