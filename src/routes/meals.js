@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import supabase from '../services/supabase.js'
+import { calcKBJU } from '../services/groq.js'
 
 const router = Router()
 
@@ -55,6 +56,18 @@ async function recalcChefStats(gremlin_id) {
   await supabase.from('gremlins').update({ stats, updated_at: new Date().toISOString() }).eq('id', gremlin_id)
   return stats
 }
+
+router.post('/calc-kbju', async (req, res) => {
+  const { name, weight_g } = req.body
+  if (!name) return res.status(400).json({ error: 'name required' })
+  try {
+    const result = await calcKBJU(name, weight_g || null)
+    res.json(result)
+  } catch (e) {
+    console.error('calcKBJU error:', e)
+    res.status(500).json({ error: 'calc failed' })
+  }
+})
 
 router.get('/', async (req, res) => {
   const { gremlin_id, limit = 50 } = req.query
