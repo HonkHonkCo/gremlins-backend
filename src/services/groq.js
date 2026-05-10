@@ -8,32 +8,19 @@ export async function chatWithGremlin(gremlin, userMessage, recentEntries, allGr
     .map(e => `${e.entry_date}: ${e.content}`)
     .join('\n')
 
-  // Строим контекст данных по роли
   let dataContext = ''
 
   if (gremlin.role === 'accountant' && fullContext.accounts) {
     const { accounts = [], transactions = [], active_debts = [] } = fullContext
-
     const accLines = accounts.map(a =>
       `  • ${a.name}: ${a.balance?.toLocaleString('ru-RU')} ${a.currency}`
     ).join('\n')
-
-    // Группируем транзакции по валюте
-    const byType = {}
-    for (const tx of transactions) {
-      const key = `${tx.type}_${tx.currency}`
-      byType[key] = (byType[key] || 0) + tx.amount
-    }
-
-    // Последние 10 транзакций
     const lastTx = transactions.slice(0, 10).map(t =>
       `  ${t.date} [${t.type}] ${t.amount} ${t.currency}${t.category ? ' / ' + t.category : ''}${t.note ? ' — ' + t.note : ''}`
     ).join('\n')
-
     const debtLines = active_debts.map(d =>
       `  ${d.direction === 'gave' ? 'Дал' : 'Взял'} ${d.amount} ${d.currency} у/от ${d.person}${d.note ? ' (' + d.note + ')' : ''}`
     ).join('\n')
-
     dataContext = `
 === ФИНАНСОВЫЕ ДАННЫЕ ===
 СЧЕТА:
@@ -52,10 +39,8 @@ ${debtLines || '  нет долгов'}
     const last5 = ws.slice(0, 5).map(w =>
       `  ${w.date} ${w.type}${w.duration_min ? ' ' + w.duration_min + 'мин' : ''}${w.distance_km ? ' ' + w.distance_km + 'км' : ''}${w.sets && w.reps ? ' ' + w.sets + 'х' + w.reps : ''}${w.calories ? ' ~' + w.calories + 'ккал' : ''}${w.note ? ' — ' + w.note : ''}`
     ).join('\n')
-
     const totalKcal = ws.reduce((s, w) => s + (w.calories || 0), 0)
     const types = [...new Set(ws.map(w => w.type))].join(', ')
-
     dataContext = `
 === ТРЕНИРОВКИ ===
 Последние 5:
@@ -73,14 +58,12 @@ ${last5 || '  нет тренировок'}
     const last5 = meals.slice(0, 5).map(m =>
       `  ${m.date} [${m.meal_type || '?'}] ${m.name}${m.calories ? ' ' + m.calories + 'ккал' : ''}${m.protein ? ' Б' + Math.round(m.protein) + 'г' : ''}${m.carbs ? ' У' + Math.round(m.carbs) + 'г' : ''}${m.fat ? ' Ж' + Math.round(m.fat) + 'г' : ''}`
     ).join('\n')
-
     const todayKcal = todayMeals.reduce((s, m) => s + (m.calories || 0), 0)
     const todayProt = todayMeals.reduce((s, m) => s + (m.protein || 0), 0)
     const todayCarbs = todayMeals.reduce((s, m) => s + (m.carbs || 0), 0)
-
     dataContext = `
 === ПИТАНИЕ ===
-Сегодня (${today}): ${todayKcal} ккал, Б${Math.round(todayProt)}г, У${Math.round(todayCarbs)}г (${todayMeals.length} приёмов пищи)
+Сегодня (${today}): ${todayKcal} ккал, Б${Math.round(todayProt)}г, У${Math.round(todayCarbs)}г (${todayMeals.length} приёмов)
 
 Последние записи:
 ${last5 || '  нет записей'}
@@ -91,18 +74,14 @@ ${last5 || '  нет записей'}
     const tasks = fullContext.tasks
     const pending = tasks.filter(t => t.status === 'pending' && !t.repeat)
     const regular = tasks.filter(t => t.repeat)
-    const today = new Date().toISOString().split('T')[0]
-
     const pendingLines = pending.slice(0, 10).map(t => {
       const daysLeft = t.deadline ? Math.ceil((new Date(t.deadline) - new Date()) / 86400000) : null
       const urgency = daysLeft === null ? '' : daysLeft < 0 ? ' [ПРОСРОЧЕНО]' : daysLeft === 0 ? ' [СЕГОДНЯ]' : daysLeft === 1 ? ' [ЗАВТРА]' : ` [через ${daysLeft}д]`
-      return `  [${t.priority}] ${t.title}${t.deadline ? ' до ' + t.deadline : ''}${urgency}${t.description ? ' — ' + t.description : ''}`
+      return `  [${t.priority}] ${t.title}${t.deadline ? ' до ' + t.deadline : ''}${urgency}`
     }).join('\n')
-
     const regularLines = regular.map(t =>
       `  [${t.repeat}] ${t.title}${t.deadline ? ' (след: ' + t.deadline + ')' : ''}`
     ).join('\n')
-
     dataContext = `
 === ЗАДАЧИ ===
 В работе (${pending.length}):
@@ -113,19 +92,17 @@ ${regularLines || '  нет регулярных'}
 `
   }
 
-  // Другие гремлины
   const siblingsText = allGremlins?.length
-    ? '\n=== ДРУГИЕ ГРЕМЛИНЫ ПОЛЬЗОВАТЕЛЯ ===\n' + allGremlins.map(g =>
+    ? '\n=== ДРУГИЕ ГРЕМЛИНЫ ===\n' + allGremlins.map(g =>
         `${g.name} (${g.role}): ${JSON.stringify(g.stats || {}).slice(0, 150)}`
       ).join('\n')
     : ''
 
-  // Роль-специфичные инструкции
   const roleInstructions = {
-    accountant: 'Ты следишь за финансами. Можешь анализировать расходы, доходы, советовать как экономить. Знаешь все счета и вклады пользователя включая проценты и сроки.',
-    trainer: 'Ты следишь за тренировками и физической формой. Знаешь все тренировки, можешь анализировать прогресс, советовать программу.',
-    chef: 'Ты следишь за питанием. Знаешь все приёмы пищи, КБЖУ за день и неделю. Можешь советовать рецепты и корректировать рацион.',
-    secretary: 'Ты следишь за задачами и дедлайнами. Знаешь все задачи включая регулярные. Можешь создавать новые задачи если пользователь просит — просто ответь что добавил, система сделает остальное.',
+    accountant: 'Ты следишь за финансами. Знаешь все счета, вклады с процентами и сроками, активные долги.',
+    trainer: 'Ты следишь за тренировками. Знаешь все тренировки, можешь анализировать прогресс.',
+    chef: 'Ты следишь за питанием. Знаешь все приёмы пищи, КБЖУ за день и неделю.',
+    secretary: 'Ты следишь за задачами. Знаешь все задачи включая регулярные. Можешь создать новую задачу если пользователь просит.',
   }
 
   const response = await groq.chat.completions.create({
@@ -135,15 +112,12 @@ ${regularLines || '  нет регулярных'}
         role: 'system',
         content: `Ты гремлин по имени ${gremlin.name}. Твоя роль: ${gremlin.role}.
 ${gremlin.description ? `Описание: ${gremlin.description}` : ''}
-
 ${roleInstructions[gremlin.role] || ''}
-
-ВАЖНО: Ты обращаешься к ПОЛЬЗОВАТЕЛЮ, не называй себя по имени и не говори "я, ${gremlin.name}". Говори от первого лица как помощник.
-Говори на русском. Будь немного с характером — ты гремлин, не скучный бот. Отвечай коротко и по делу (2-4 предложения если не просят подробнее).
-Если пользователь просит данные за неделю или месяц — используй данные ниже и дай подробный ответ.
-${dataContext}
-${siblingsText}
-=== ИСТОРИЯ ДИАЛОГА (последние сообщения) ===
+ВАЖНО: Обращайся к пользователю на "ты". Не называй его своим именем.
+Говори на русском. Будь немного с характером — ты гремлин, не скучный бот.
+Отвечай коротко (2-4 предложения) если не просят подробнее.
+${dataContext}${siblingsText}
+=== ИСТОРИЯ ДИАЛОГА ===
 ${entriesText || 'Пока ничего нет.'}`
       },
       { role: 'user', content: userMessage }
@@ -156,11 +130,10 @@ ${entriesText || 'Пока ничего нет.'}`
 
 export async function parseEntry(role, content) {
   const roleSchemas = {
-    accountant: `{"items": [{"amount": 650, "currency": "THB", "type": "expense", "category": "такси", "note": "поездка"}, ...], "total": 850}
-type может быть: expense, income, investment`,
-    trainer: `{"calories": 1800, "workout": "бег", "workout_type": "бег", "duration_min": 30, "distance_km": 5, "sets": 3, "reps": 15, "weight_kg": 70, "water_liters": 1.5, "pushups": 20, "note": "хорошо прошло"}`,
-    secretary: `{"task": "название задачи", "description": "детали", "deadline": "2026-06-15", "priority": "high|medium|low", "repeat": "daily|weekly|monthly|null"}`,
-    chef: `{"meal": "название блюда", "meal_type": "завтрак|обед|ужин|перекус", "calories": 450, "protein": 25, "carbs": 60, "fat": 12, "note": ""}`,
+    accountant: `{"items": [{"amount": 650, "currency": "THB", "type": "expense", "category": "такси", "note": ""}], "total": 650}`,
+    trainer: `{"calories": 1800, "workout": "бег", "workout_type": "бег", "duration_min": 30, "distance_km": 5, "sets": 3, "reps": 15, "weight_kg": 70, "water_liters": 1.5, "pushups": 20}`,
+    secretary: `{"task": "название", "description": "детали", "deadline": "2026-06-15", "priority": "high|medium|low", "repeat": "daily|weekly|monthly|null"}`,
+    chef: `{"meal": "название блюда", "meal_type": "завтрак|обед|ужин|перекус", "calories": 450, "protein": 25, "carbs": 60, "fat": 12}`,
   }
 
   const response = await groq.chat.completions.create({
@@ -168,9 +141,9 @@ type может быть: expense, income, investment`,
     messages: [
       {
         role: 'system',
-        content: `Ты парсер данных. Пользователь говорит своему гремлину (роль: ${role}) что-то.
-Извлеки структурированные данные и верни ТОЛЬКО JSON без лишнего текста, без markdown, без блоков кода.
-Схема для роли ${role}: ${roleSchemas[role] || '{}'}
+        content: `Ты парсер данных. Извлеки структурированные данные из сообщения пользователя гремлину (роль: ${role}).
+Верни ТОЛЬКО JSON без markdown и без блоков кода.
+Схема: ${roleSchemas[role] || '{}'}
 Если не можешь распознать — верни {}`
       },
       { role: 'user', content }
@@ -200,6 +173,7 @@ export async function calcKBJU(foodName, weight_g) {
     ],
     max_tokens: 100
   })
+
   try {
     const text = response.choices[0].message.content.trim().replace(/```json|```/g, '').trim()
     return JSON.parse(text)
@@ -208,7 +182,7 @@ export async function calcKBJU(foodName, weight_g) {
   }
 }
 
-
+export async function generateGremlinAdvice(gremlin) {
   const stats = gremlin.stats || {}
   const role = gremlin.role
 
@@ -216,7 +190,7 @@ export async function calcKBJU(foodName, weight_g) {
     accountant: `Финансовый гремлин. Статистика: ${JSON.stringify(stats)}`,
     trainer: `Тренер-гремлин. Статистика: ${JSON.stringify(stats)}`,
     chef: `Шеф-гремлин. Статистика: ${JSON.stringify(stats)}`,
-    secretary: `Секретарь-гремлин. Задачи: ${stats.pending_tasks || 0} в работе, ближайший дедлайн: ${stats.next_deadline || 'нет'}`,
+    secretary: `Секретарь-гремлин. Задач в работе: ${stats.pending_tasks || 0}, ближайший дедлайн: ${stats.next_deadline || 'нет'}`,
   }
 
   const response = await groq.chat.completions.create({
@@ -225,8 +199,8 @@ export async function calcKBJU(foodName, weight_g) {
       {
         role: 'system',
         content: `Ты гремлин по имени ${gremlin.name} (роль: ${role}).
-Напиши короткое (1-2 предложения) мотивационное или полезное сообщение пользователю на основе его данных.
-Будь конкретным, используй цифры из статистики если есть. Говори на русском, с характером гремлина.`
+Напиши короткое (1-2 предложения) мотивационное сообщение пользователю на основе его данных.
+Будь конкретным, используй цифры. Говори на русском, с характером гремлина.`
       },
       {
         role: 'user',
