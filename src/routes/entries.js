@@ -62,6 +62,33 @@ router.post('/chat', async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(20)
 
+  // Загружаем полные данные по роли для контекста ИИ
+  let fullContext = {}
+
+  if (gremlin.role === 'accountant') {
+    const [{ data: txs }, { data: accs }, { data: debts }] = await Promise.all([
+      supabase.from('transactions').select('amount,currency,type,category,note,date').eq('gremlin_id', gremlin_id).order('date', { ascending: false }).limit(50),
+      supabase.from('accounts').select('name,currency,balance').eq('gremlin_id', gremlin_id),
+      supabase.from('debts').select('direction,person,amount,currency,status,note').eq('gremlin_id', gremlin_id).eq('status', 'active'),
+    ])
+    fullContext = { accounts: accs || [], transactions: txs || [], active_debts: debts || [] }
+  }
+
+  if (gremlin.role === 'trainer') {
+    const { data: workouts } = await supabase.from('workouts').select('type,duration_min,distance_km,sets,reps,calories,date,note').eq('gremlin_id', gremlin_id).order('date', { ascending: false }).limit(30)
+    fullContext = { workouts: workouts || [] }
+  }
+
+  if (gremlin.role === 'chef') {
+    const { data: meals } = await supabase.from('meals').select('name,calories,protein,carbs,fat,meal_type,date').eq('gremlin_id', gremlin_id).order('date', { ascending: false }).limit(30)
+    fullContext = { meals: meals || [] }
+  }
+
+  if (gremlin.role === 'secretary') {
+    const { data: tasks } = await supabase.from('tasks').select('title,deadline,priority,status,repeat,description').eq('gremlin_id', gremlin_id).order('deadline', { ascending: true, nullsFirst: false }).limit(50)
+    fullContext = { tasks: tasks || [] }
+  }
+
   // Если фронт уже распарсил файл — используем его данные, не тратим groq токены
   const parsedFromFront = parsed_totals && Object.keys(parsed_totals).length > 0
 
@@ -75,7 +102,7 @@ router.post('/chat', async (req, res) => {
         })}
       )
       : parseEntry(gremlin.role, content, !!is_file),
-    chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [])
+    chatWithGremlin(gremlin, content, recentEntries || [], allGremlins || [], fullContext)
   ])
 
   // Для файлов сохраняем имя файла как content — в истории покажется как 📎 filename
@@ -182,7 +209,33 @@ function mergeStats(current, parsed, role) {
   }
 
   if (role === 'chef') {
-    if (parsed.calories != null) stats.last_calories = parsed.calories
+    const today = new Date().toISOString().split('T')[0]
+    if (parsed.calories != null) {
+      stats.last_calories = parsed.calories
+      // Если запись сегодняшнего дня — суммируем в today_calories
+      const lastDate = stats.today_date
+      if (lastDate === today) {
+        stats.today_calories = Math.round(((stats.today_calories || 0) + parsed.calories) * 10) / 10
+        stats.today_protein = Math.round(((stats.today_protein || 0) + (parsed.protein || 0)) * 10) / 10
+        stats.today_carbs = Math.round(((stats.today_carbs || 0) + (parsed.carbs || 0)) * 10) / 10
+        stats.today_fat = Math.round(((stats.today_fat || 0) + (parsed.fat || 0)) * 10) / 10
+      } else {
+        // Новый день — сбрасываем дневные и переносим вчера в week
+        const prevKcal = stats.today_calories || 0
+        if (prevKcal > 0) {
+          const week = stats.week_log || []
+          week.push(prevKcal)
+          if (week.length > 7) week.shift()
+          stats.week_log = week
+          stats.week_calories = Math.round(week.reduce((s, v) => s + v, 0))
+        }
+        stats.today_date = today
+        stats.today_calories = parsed.calories
+        stats.today_protein = parsed.protein || 0
+        stats.today_carbs = parsed.carbs || 0
+        stats.today_fat = parsed.fat || 0
+      }
+    }
     if (parsed.meal) stats.last_meal = parsed.meal
     if (parsed.protein != null) stats.last_protein = parsed.protein
   }
