@@ -127,6 +127,32 @@ router.post('/chat', async (req, res) => {
   let updatedStats = gremlin.stats || {}
   if (parsed && Object.keys(parsed).length > 0) {
     updatedStats = mergeStats(gremlin.stats || {}, parsed, gremlin.role)
+
+    // Для секретаря — создаём задачу в БД если ИИ её распарсил
+    if (gremlin.role === 'secretary' && parsed.task) {
+      const { data: newTask } = await supabase.from('tasks').insert({
+        gremlin_id,
+        title: parsed.task,
+        deadline: parsed.deadline || null,
+        priority: parsed.priority || 'medium',
+        description: parsed.description || null,
+        repeat: parsed.repeat || null,
+        status: 'pending',
+      }).select().single()
+
+      // Пересчитываем stats через recalc
+      const { data: allTasks } = await supabase
+        .from('tasks').select('*').eq('gremlin_id', gremlin_id).eq('status', 'pending')
+        .order('deadline', { ascending: true, nullsFirst: false })
+      const pending = (allTasks || []).filter(t => !t.repeat)
+      updatedStats.pending_tasks = pending.length
+      updatedStats.next_tasks = pending.slice(0, 3).map(t => ({
+        title: t.title, deadline: t.deadline || null, priority: t.priority || 'medium',
+      }))
+      updatedStats.next_deadline = pending.find(t => t.deadline)?.deadline || null
+      updatedStats.next_task_title = pending[0]?.title || null
+    }
+
     await supabase.from('gremlins')
       .update({ stats: updatedStats, updated_at: new Date().toISOString() })
       .eq('id', gremlin_id)
@@ -192,19 +218,28 @@ function mergeStats(current, parsed, role) {
   if (role === 'trainer') {
     if (parsed.calories != null) stats.last_calories = parsed.calories
     if (parsed.workout != null) stats.last_workout = parsed.workout
+    if (parsed.workout_type != null) stats.last_workout_type = parsed.workout_type
+    else if (parsed.workout != null) stats.last_workout_type = parsed.workout.split(' ')[0]
     if (parsed.water_liters != null) stats.last_water = parsed.water_liters
     if (parsed.weight_kg != null) stats.weight_kg = parsed.weight_kg
     if (parsed.steps != null) stats.steps = parsed.steps
     if (parsed.pushups != null) stats.last_pushups = parsed.pushups
     if (parsed.distance_km != null) stats.last_distance_km = parsed.distance_km
+    if (parsed.duration_min != null) stats.last_duration_min = parsed.duration_min
     stats.last_updated = new Date().toISOString().split('T')[0]
   }
 
   if (role === 'secretary') {
     if (parsed.task) {
-      stats.pending_tasks = (stats.pending_tasks || 0) + 1
-      stats.last_task = parsed.task
-      if (parsed.deadline) stats.next_deadline = parsed.deadline
+      // Создаём задачу через API если ИИ распарсил её
+      // stats обновится через recalcSecretaryStats в tasks.js при POST
+      stats.last_parsed_task = {
+        title: parsed.task,
+        deadline: parsed.deadline || null,
+        priority: parsed.priority || 'medium',
+        description: parsed.description || null,
+        repeat: parsed.repeat || null,
+      }
     }
   }
 
