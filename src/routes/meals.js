@@ -1,6 +1,5 @@
 import { Router } from 'express'
 import supabase from '../services/supabase.js'
-import { calcKBJU } from '../services/groq.js'
 
 const router = Router()
 
@@ -34,10 +33,30 @@ async function recalcChefStats(gremlin_id) {
   const week_calories = days.length ? Math.round(days.reduce((s, v) => s + v, 0)) : 0
   const avg_day_calories = days.length ? Math.round(week_calories / days.length) : 0
 
+  // По дням — детальный лог для статуса на главном экране
+  const byDayFull = {}
+  for (const m of meals) {
+    if (!byDayFull[m.date]) byDayFull[m.date] = { date: m.date, calories: 0, protein: 0, carbs: 0, fat: 0 }
+    byDayFull[m.date].calories += m.calories || 0
+    byDayFull[m.date].protein  += m.protein  || 0
+    byDayFull[m.date].carbs    += m.carbs    || 0
+    byDayFull[m.date].fat      += m.fat      || 0
+  }
+  // Сортируем по дате убывающей, округляем
+  const day_log = Object.values(byDayFull)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 7)
+    .map(d => ({
+      date: d.date,
+      calories: Math.round(d.calories),
+      protein:  Math.round(d.protein  * 10) / 10,
+      carbs:    Math.round(d.carbs    * 10) / 10,
+      fat:      Math.round(d.fat      * 10) / 10,
+    }))
+
   const { data: gremlin } = await supabase.from('gremlins').select('stats').eq('id', gremlin_id).single()
   const stats = { ...(gremlin?.stats || {}) }
 
-  // Убираем старые мусорные поля
   delete stats.last_meal
   delete stats.total_meals
 
@@ -48,7 +67,7 @@ async function recalcChefStats(gremlin_id) {
   stats.today_date       = today
   stats.week_calories    = week_calories
   stats.avg_day_calories = avg_day_calories
-  // last_calories — последний приём для fallback
+  stats.day_log          = day_log
   if (meals[0]?.calories) stats.last_calories = meals[0].calories
   if (meals[0]?.protein)  stats.last_protein  = meals[0].protein
   stats.last_updated = today
@@ -56,18 +75,6 @@ async function recalcChefStats(gremlin_id) {
   await supabase.from('gremlins').update({ stats, updated_at: new Date().toISOString() }).eq('id', gremlin_id)
   return stats
 }
-
-router.post('/calc-kbju', async (req, res) => {
-  const { name, weight_g } = req.body
-  if (!name) return res.status(400).json({ error: 'name required' })
-  try {
-    const result = await calcKBJU(name, weight_g || null)
-    res.json(result)
-  } catch (e) {
-    console.error('calcKBJU error:', e)
-    res.status(500).json({ error: 'calc failed' })
-  }
-})
 
 router.get('/', async (req, res) => {
   const { gremlin_id, limit = 50 } = req.query
