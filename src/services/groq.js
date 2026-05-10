@@ -186,7 +186,29 @@ type может быть: expense, income, investment`,
   }
 }
 
-export async function generateGremlinAdvice(gremlin) {
+export async function calcKBJU(foodName, weight_g) {
+  const response = await groq.chat.completions.create({
+    model: MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: `Ты нутрициолог. Дай примерное КБЖУ для блюда.
+Верни ТОЛЬКО JSON без markdown: {"calories": 250, "protein": 10, "carbs": 30, "fat": 8}
+Всё на 100г если вес не указан, иначе на указанный вес.`
+      },
+      { role: 'user', content: `${foodName}${weight_g ? ', ' + weight_g + 'г' : ''}` }
+    ],
+    max_tokens: 100
+  })
+  try {
+    const text = response.choices[0].message.content.trim().replace(/```json|```/g, '').trim()
+    return JSON.parse(text)
+  } catch {
+    return {}
+  }
+}
+
+
   const stats = gremlin.stats || {}
   const role = gremlin.role
 
