@@ -3,150 +3,150 @@ import Groq from 'groq-sdk'
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile'
 
-export async function chatWithGremlin(gremlin, userMessage, recentEntries, otherGremlins = []) {
+export async function chatWithGremlin(gremlin, userMessage, recentEntries, allGremlins, fullContext = {}) {
   const entriesText = recentEntries
-    .map(e => {
-      const base = e.entry_date + ': ' + e.content
-      return e.reply ? base + '\n  → ты: ' + e.reply.slice(0, 120) : base
-    })
+    .map(e => `${e.entry_date}: ${e.content}`)
     .join('\n')
 
-  const statsText = gremlin.stats && Object.keys(gremlin.stats).length > 0
-    ? '\nТвоя накопленная статистика:\n' +
-      Object.entries(gremlin.stats)
-        .filter(([k, v]) => k !== 'last_updated' && v !== null && v !== undefined && v !== 0 && v !== '')
-        .map(([k, v]) => '  ' + k + ': ' + v)
-        .join('\n')
-    : ''
+  // Строим контекст данных по роли
+  let dataContext = ''
 
-  const otherStats = otherGremlins.length > 0
-    ? '\nДанные других гремлинов:\n' +
-      otherGremlins.map(g => {
-        const s = g.stats || {}
-        const relevant = Object.entries(s)
-          .filter(([k, v]) => k !== 'last_updated' && v !== null && v !== 0 && v !== '')
-          .slice(0, 5)
-        return '  ' + g.name + ' (' + g.role + '): ' + (relevant.map(([k, v]) => k + '=' + v).join(', ') || 'нет данных')
-      }).join('\n')
-    : ''
+  if (gremlin.role === 'accountant' && fullContext.accounts) {
+    const { accounts = [], transactions = [], active_debts = [] } = fullContext
 
-  const systemContent = 'Ты гремлин по имени ' + gremlin.name + '. Твоя роль: ' + gremlin.role + '.\n' +
-    (gremlin.description ? 'Описание: ' + gremlin.description + '\n' : '') +
-    'Отвечай коротко и по делу на русском. Ты гремлин — с характером, не скучный бот.\n' +
-    'Если спрашивают статус или итоги — используй данные из статистики ниже, они актуальны.\n' +
-    statsText + otherStats + '\n\nИстория переписки:\n' +
-    (entriesText || 'Пока ничего нет.')
+    const accLines = accounts.map(a =>
+      `  • ${a.name}: ${a.balance?.toLocaleString('ru-RU')} ${a.currency}`
+    ).join('\n')
 
-  const response = await groq.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemContent },
-      { role: 'user', content: userMessage }
-    ],
-    max_tokens: 500
-  })
-
-  return response.choices[0].message.content
-}
-
-export async function parseEntry(role, content, isFile = false) {
-  let systemPrompt = ''
-
-  if (role === 'accountant') {
-    const baseRules = 'ПРАВИЛА ОПРЕДЕЛЕНИЯ ВАЛЮТЫ:\n' +
-      '- $ / USD / долл / dollar = USD\n' +
-      '- р / руб / рублей / ₽ / RUB = RUB\n' +
-      '- ฿ / бат / baht / THB = THB\n' +
-      '- Rp / рп / IDR / рупий = IDR\n' +
-      '- € / евро / EUR = EUR\n' +
-      '- £ / фунт / GBP = GBP\n' +
-      '- AUD / австр = AUD\n' +
-      '- ЛЮБУЮ другую валюту определяй по ISO коду (3 буквы)\n\n' +
-      'ПРАВИЛА ТИПА:\n' +
-      '- expense: купил, потратил, заплатил, "X на [товар]"\n' +
-      '- income: получил, зарплата, пришло, +X\n' +
-      '- income: "у меня есть X", "наличка X", "остаток X", "на счёте X" — это текущий баланс, записывай как income\n' +
-      '- Переводы между своими счетами ("с псб на сбер") — пропускай\n' +
-      '- "с 50$" = остаток купюры — игнорируй\n' +
-      '- Если валюта неясна — используй "UNKNOWN"\n\n'
-
-    if (isFile) {
-      systemPrompt = 'Ты финансовый аналитик. Тебе дан экспорт чата с финансовыми записями.\n' +
-        'Извлеки ВСЕ финансовые операции.\n\n' +
-        baseRules +
-        'Верни ТОЛЬКО JSON:\n' +
-        '{"items":[{"amount":3.15,"currency":"USD","category":"кафе","type":"expense","date":"2026-02-01"}]}\n' +
-        'Если данных нет — верни {}'
-    } else {
-      systemPrompt = 'Ты парсер финансовых данных. Извлеки операции из сообщения пользователя.\n\n' +
-        baseRules +
-        'Верни ТОЛЬКО JSON:\n' +
-        '{"items":[{"amount":500,"currency":"THB","category":"еда","type":"expense"}]}\n' +
-        'Если данных нет — верни {}'
+    // Группируем транзакции по валюте
+    const byType = {}
+    for (const tx of transactions) {
+      const key = `${tx.type}_${tx.currency}`
+      byType[key] = (byType[key] || 0) + tx.amount
     }
-  } else if (role === 'trainer') {
-    systemPrompt = 'Ты парсер данных о тренировках. Извлекай ТОЛЬКО то что реально написал пользователь.\n' +
-      'НЕ придумывай данные которых нет.\n\n' +
-      'Распознавай:\n' +
-      '- бег X км / пробежал X = distance_km + workout\n' +
-      '- отжимания X = pushups\n' +
-      '- вес X кг = weight_kg\n' +
-      '- X калорий / ккал = calories\n' +
-      '- X шагов = steps\n' +
-      '- воды X литров = water_liters\n\n' +
-      'Верни ТОЛЬКО JSON (null для отсутствующих):\n' +
-      '{"calories":null,"workout":null,"water_liters":null,"weight_kg":null,"steps":null,"pushups":null,"distance_km":null}\n' +
-      'Если данных нет — верни {}'
-  } else if (role === 'secretary') {
-    systemPrompt = 'Ты парсер задач. Верни ТОЛЬКО JSON:\n' +
-      '{"task":"название","amount":null,"currency":null,"deadline":null,"priority":"medium"}\n' +
-      'priority: high/medium/low. Если данных нет — верни {}'
-  } else if (role === 'chef') {
-    systemPrompt = 'Ты парсер питания. Верни ТОЛЬКО JSON:\n' +
-      '{"meal":"блюдо","calories":null,"protein":null,"carbs":null,"fat":null}\n' +
-      'Если данных нет — верни {}'
-  } else {
-    systemPrompt = 'Извлеки данные и верни ТОЛЬКО JSON. Если не можешь — верни {}'
+
+    // Последние 10 транзакций
+    const lastTx = transactions.slice(0, 10).map(t =>
+      `  ${t.date} [${t.type}] ${t.amount} ${t.currency}${t.category ? ' / ' + t.category : ''}${t.note ? ' — ' + t.note : ''}`
+    ).join('\n')
+
+    const debtLines = active_debts.map(d =>
+      `  ${d.direction === 'gave' ? 'Дал' : 'Взял'} ${d.amount} ${d.currency} у/от ${d.person}${d.note ? ' (' + d.note + ')' : ''}`
+    ).join('\n')
+
+    dataContext = `
+=== ФИНАНСОВЫЕ ДАННЫЕ ===
+СЧЕТА:
+${accLines || '  нет счетов'}
+
+ПОСЛЕДНИЕ ОПЕРАЦИИ:
+${lastTx || '  нет операций'}
+
+АКТИВНЫЕ ДОЛГИ:
+${debtLines || '  нет долгов'}
+`
   }
 
-  const response = await groq.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: isFile ? content.slice(0, 12000) : content }
-    ],
-    max_tokens: isFile ? 4000 : 800
-  })
+  if (gremlin.role === 'trainer' && fullContext.workouts) {
+    const ws = fullContext.workouts
+    const last5 = ws.slice(0, 5).map(w =>
+      `  ${w.date} ${w.type}${w.duration_min ? ' ' + w.duration_min + 'мин' : ''}${w.distance_km ? ' ' + w.distance_km + 'км' : ''}${w.sets && w.reps ? ' ' + w.sets + 'х' + w.reps : ''}${w.calories ? ' ~' + w.calories + 'ккал' : ''}${w.note ? ' — ' + w.note : ''}`
+    ).join('\n')
 
-  try {
-    const text = response.choices[0].message.content.trim()
-    const clean = text.replace(/^```json\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '')
-    return JSON.parse(clean)
-  } catch {
-    return {}
+    const totalKcal = ws.reduce((s, w) => s + (w.calories || 0), 0)
+    const types = [...new Set(ws.map(w => w.type))].join(', ')
+
+    dataContext = `
+=== ТРЕНИРОВКИ ===
+Последние 5:
+${last5 || '  нет тренировок'}
+
+Всего тренировок: ${ws.length}, виды: ${types || 'нет'}
+Сожжено калорий (всего): ${totalKcal}
+`
   }
-}
 
-export async function generateWeeklyReport(gremlins, allEntries) {
-  const summaryData = gremlins.map(g => {
-    const stats = g.stats || {}
-    const statsStr = Object.entries(stats)
-      .filter(([k, v]) => k !== 'last_updated' && v !== null && v !== 0)
-      .map(([k, v]) => k + ': ' + v)
-      .join(', ')
-    return g.name + ' (' + g.role + '): ' + (statsStr || 'нет данных')
-  }).join('\n')
+  if (gremlin.role === 'chef' && fullContext.meals) {
+    const meals = fullContext.meals
+    const today = new Date().toISOString().split('T')[0]
+    const todayMeals = meals.filter(m => m.date === today)
+    const last5 = meals.slice(0, 5).map(m =>
+      `  ${m.date} [${m.meal_type || '?'}] ${m.name}${m.calories ? ' ' + m.calories + 'ккал' : ''}${m.protein ? ' Б' + Math.round(m.protein) + 'г' : ''}${m.carbs ? ' У' + Math.round(m.carbs) + 'г' : ''}${m.fat ? ' Ж' + Math.round(m.fat) + 'г' : ''}`
+    ).join('\n')
+
+    const todayKcal = todayMeals.reduce((s, m) => s + (m.calories || 0), 0)
+    const todayProt = todayMeals.reduce((s, m) => s + (m.protein || 0), 0)
+    const todayCarbs = todayMeals.reduce((s, m) => s + (m.carbs || 0), 0)
+
+    dataContext = `
+=== ПИТАНИЕ ===
+Сегодня (${today}): ${todayKcal} ккал, Б${Math.round(todayProt)}г, У${Math.round(todayCarbs)}г (${todayMeals.length} приёмов пищи)
+
+Последние записи:
+${last5 || '  нет записей'}
+`
+  }
+
+  if (gremlin.role === 'secretary' && fullContext.tasks) {
+    const tasks = fullContext.tasks
+    const pending = tasks.filter(t => t.status === 'pending' && !t.repeat)
+    const regular = tasks.filter(t => t.repeat)
+    const today = new Date().toISOString().split('T')[0]
+
+    const pendingLines = pending.slice(0, 10).map(t => {
+      const daysLeft = t.deadline ? Math.ceil((new Date(t.deadline) - new Date()) / 86400000) : null
+      const urgency = daysLeft === null ? '' : daysLeft < 0 ? ' [ПРОСРОЧЕНО]' : daysLeft === 0 ? ' [СЕГОДНЯ]' : daysLeft === 1 ? ' [ЗАВТРА]' : ` [через ${daysLeft}д]`
+      return `  [${t.priority}] ${t.title}${t.deadline ? ' до ' + t.deadline : ''}${urgency}${t.description ? ' — ' + t.description : ''}`
+    }).join('\n')
+
+    const regularLines = regular.map(t =>
+      `  [${t.repeat}] ${t.title}${t.deadline ? ' (след: ' + t.deadline + ')' : ''}`
+    ).join('\n')
+
+    dataContext = `
+=== ЗАДАЧИ ===
+В работе (${pending.length}):
+${pendingLines || '  нет задач'}
+
+Регулярные (${regular.length}):
+${regularLines || '  нет регулярных'}
+`
+  }
+
+  // Другие гремлины
+  const siblingsText = allGremlins?.length
+    ? '\n=== ДРУГИЕ ГРЕМЛИНЫ ПОЛЬЗОВАТЕЛЯ ===\n' + allGremlins.map(g =>
+        `${g.name} (${g.role}): ${JSON.stringify(g.stats || {}).slice(0, 150)}`
+      ).join('\n')
+    : ''
+
+  // Роль-специфичные инструкции
+  const roleInstructions = {
+    accountant: 'Ты следишь за финансами. Можешь анализировать расходы, доходы, советовать как экономить. Знаешь все счета и вклады пользователя включая проценты и сроки.',
+    trainer: 'Ты следишь за тренировками и физической формой. Знаешь все тренировки, можешь анализировать прогресс, советовать программу.',
+    chef: 'Ты следишь за питанием. Знаешь все приёмы пищи, КБЖУ за день и неделю. Можешь советовать рецепты и корректировать рацион.',
+    secretary: 'Ты следишь за задачами и дедлайнами. Знаешь все задачи включая регулярные. Можешь создавать новые задачи если пользователь просит — просто ответь что добавил, система сделает остальное.',
+  }
 
   const response = await groq.chat.completions.create({
     model: MODEL,
     messages: [
       {
         role: 'system',
-        content: 'Ты составляешь еженедельный отчёт для пользователя по его гремлинам. ' +
-          'Напиши краткий дружелюбный итог недели на русском, максимум 200 слов. ' +
-          'Отметь успехи, предупреди о проблемах, дай 1-2 совета.'
+        content: `Ты гремлин по имени ${gremlin.name}. Твоя роль: ${gremlin.role}.
+${gremlin.description ? `Описание: ${gremlin.description}` : ''}
+
+${roleInstructions[gremlin.role] || ''}
+
+ВАЖНО: Ты обращаешься к ПОЛЬЗОВАТЕЛЮ, не называй себя по имени и не говори "я, ${gremlin.name}". Говори от первого лица как помощник.
+Говори на русском. Будь немного с характером — ты гремлин, не скучный бот. Отвечай коротко и по делу (2-4 предложения если не просят подробнее).
+Если пользователь просит данные за неделю или месяц — используй данные ниже и дай подробный ответ.
+${dataContext}
+${siblingsText}
+=== ИСТОРИЯ ДИАЛОГА (последние сообщения) ===
+${entriesText || 'Пока ничего нет.'}`
       },
-      { role: 'user', content: 'Данные гремлинов за неделю:\n' + summaryData }
+      { role: 'user', content: userMessage }
     ],
     max_tokens: 600
   })
@@ -154,19 +154,13 @@ export async function generateWeeklyReport(gremlins, allEntries) {
   return response.choices[0].message.content
 }
 
-// Генерация персонального совета для push-уведомления
-export async function generateGremlinAdvice(gremlin) {
-  const stats = gremlin.stats || {}
-  const statsStr = Object.entries(stats)
-    .filter(([k, v]) => k !== 'last_updated' && v !== null && v !== 0 && v !== '')
-    .map(([k, v]) => k + ': ' + v)
-    .join(', ')
-
-  const roleContext = {
-    accountant: 'финансовый гремлин-бухгалтер. Комментируй траты, баланс, предупреждай о перерасходе.',
-    trainer: 'гремлин-тренер. Мотивируй на тренировку, комментируй прогресс.',
-    secretary: 'гремлин-секретарь. Напоминай о задачах и дедлайнах.',
-    chef: 'гремлин-повар. Давай советы по питанию.'
+export async function parseEntry(role, content) {
+  const roleSchemas = {
+    accountant: `{"items": [{"amount": 650, "currency": "THB", "type": "expense", "category": "такси", "note": "поездка"}, ...], "total": 850}
+type может быть: expense, income, investment`,
+    trainer: `{"calories": 1800, "workout": "бег", "workout_type": "бег", "duration_min": 30, "distance_km": 5, "sets": 3, "reps": 15, "weight_kg": 70, "water_liters": 1.5, "pushups": 20, "note": "хорошо прошло"}`,
+    secretary: `{"task": "название задачи", "description": "детали", "deadline": "2026-06-15", "priority": "high|medium|low", "repeat": "daily|weekly|monthly|null"}`,
+    chef: `{"meal": "название блюда", "meal_type": "завтрак|обед|ужин|перекус", "calories": 450, "protein": 25, "carbs": 60, "fat": 12, "note": ""}`,
   }
 
   const response = await groq.chat.completions.create({
@@ -174,57 +168,72 @@ export async function generateGremlinAdvice(gremlin) {
     messages: [
       {
         role: 'system',
-        content: 'Ты ' + (roleContext[gremlin.role] || 'гремлин') + ' по имени ' + gremlin.name + '.\n' +
-          'Напиши ОДИН короткий совет или комментарий (2-3 предложения) на основе статистики пользователя.\n' +
-          'Пиши в стиле гремлина — с характером, иронично, но по делу. На русском.'
+        content: `Ты парсер данных. Пользователь говорит своему гремлину (роль: ${role}) что-то.
+Извлеки структурированные данные и верни ТОЛЬКО JSON без лишнего текста, без markdown, без блоков кода.
+Схема для роли ${role}: ${roleSchemas[role] || '{}'}
+Если не можешь распознать — верни {}`
       },
-      {
-        role: 'user',
-        content: 'Моя текущая статистика: ' + (statsStr || 'данных пока нет') + '\nДай совет.'
-      }
+      { role: 'user', content }
     ],
-    max_tokens: 150
-  })
-
-  return response.choices[0].message.content
-}
-
-// AI определяет валюты по меткам — минимальный промпт, ~50 токенов входа
-export async function resolvecurrencies(groups) {
-  const groupsText = Object.entries(groups)
-    .map(([label, g]) => {
-      const parts = []
-      if (g.expense > 0) parts.push('расход=' + g.expense)
-      if (g.income > 0) parts.push('доход=' + g.income)
-      return '"' + label + '": ' + parts.join(', ') + (g.samples.length ? ' (пример: ' + g.samples[0] + ')' : '')
-    })
-    .join('\n')
-
-  const response = await groq.chat.completions.create({
-    model: MODEL,
-    messages: [
-      {
-        role: 'system',
-        content: 'Ты определяешь ISO-код валюты по текстовой метке из финансовых записей.\n' +
-          'Известные метки: рп/rp/idr→IDR, $→USD, руб/р/₽/rub→RUB, бат/฿/thb→THB, €/eur/евро→EUR, £/gbp→GBP\n' +
-          'Если метка неизвестна — угадай по контексту примера или напиши "?".\n\n' +
-          'Верни ТОЛЬКО JSON массив:\n' +
-          '[{"label":"рп","iso":"IDR","expense":45000,"income":0},{"label":"$","iso":"USD","expense":127.5,"income":50}]\n' +
-          'Не добавляй комментариев, только JSON.'
-      },
-      { role: 'user', content: groupsText }
-    ],
-    max_tokens: 300
+    max_tokens: 400
   })
 
   try {
-    const text = response.choices[0].message.content.trim()
-    const clean = text.replace(/^```json\n?/i, '').replace(/^```\n?/, '').replace(/\n?```$/, '')
-    const result = JSON.parse(clean)
-    // Возвращаем массив и список непонятных меток
-    const unknown = result.filter(r => r.iso === '?').map(r => r.label)
-    return { resolved: result.filter(r => r.iso !== '?'), unknown }
+    const text = response.choices[0].message.content.trim().replace(/```json|```/g, '').trim()
+    return JSON.parse(text)
   } catch {
-    return { resolved: [], unknown: Object.keys(groups) }
+    return {}
   }
+}
+
+export async function calcKBJU(name, weight_g) {
+  const prompt = weight_g
+    ? `Блюдо: "${name}", порция: ${weight_g}г. Дай точные КБЖУ на эту порцию.`
+    : `Блюдо: "${name}". Дай среднее КБЖУ на стандартную порцию (укажи граммовку).`
+
+  const response = await groq.chat.completions.create({
+    model: MODEL,
+    messages: [{
+      role: 'user',
+      content: prompt + '\nВерни ТОЛЬКО JSON без лишнего текста: {"calories":300,"protein":25,"carbs":40,"fat":10,"weight_g":200}'
+    }],
+    max_tokens: 150
+  })
+
+  const text = response.choices[0].message.content.trim().replace(/```json|```/g, '').trim()
+  return JSON.parse(text)
+}
+
+export async function generateWeeklyReport(userOrObj, gremlinsWithEntries) {
+  let context
+
+  if (userOrObj && userOrObj.entries) {
+    const { userLabel, entries } = userOrObj
+    context = `Пользователь: ${userLabel}\n\nЗаписи за неделю:\n` +
+      entries.map(e => `[${e.gremlin_name || 'гремлин'}] ${e.created_at?.slice(0, 10)}: ${e.raw_text || e.content || ''}`).join('\n')
+  } else {
+    context = (gremlinsWithEntries || []).map(g => `
+Гремлин: ${g.name} (${g.role})
+Статистика: ${JSON.stringify(g.stats)}
+Записи за неделю:
+${g.entries.map(e => `- ${e.entry_date}: ${e.content}`).join('\n')}
+`).join('\n---\n')
+  }
+
+  const response = await groq.chat.completions.create({
+    model: MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: `Ты главный гремлин который делает еженедельный отчёт.
+Проанализируй данные от всех гремлинов и напиши короткое резюме недели.
+Говори на русском, будь конкретным — цифры, факты, одна-две рекомендации.
+Максимум 200 слов.`
+      },
+      { role: 'user', content: context }
+    ],
+    max_tokens: 600
+  })
+
+  return response.choices[0].message.content
 }
