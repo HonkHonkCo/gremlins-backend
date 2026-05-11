@@ -76,6 +76,19 @@ async function recalcChefStats(gremlin_id) {
   return stats
 }
 
+router.post('/calc-kbju', async (req, res) => {
+  const { name, weight_g } = req.body
+  if (!name) return res.status(400).json({ error: 'name required' })
+  try {
+    const { calcKBJU } = await import('../services/groq.js')
+    const result = await calcKBJU(name, weight_g || null)
+    res.json(result)
+  } catch (e) {
+    console.error('calcKBJU error:', e)
+    res.status(500).json({ error: 'calc failed' })
+  }
+})
+
 router.get('/', async (req, res) => {
   const { gremlin_id, limit = 50 } = req.query
   if (!gremlin_id) return res.status(400).json({ error: 'gremlin_id required' })
